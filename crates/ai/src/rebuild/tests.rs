@@ -2904,6 +2904,72 @@ fn a_caught_bug_leaves_a_status_the_person_can_act_on() {
     assert!(ok && !paused && message == "Ready.");
 }
 
+/// A key removed through one run's engine (`assets_key_remove` refreshes the session it holds)
+/// came back at the next call from the app's older copy, and a run beside it kept spending it
+/// (#943 review). The project hasn't turned on generated assets, so nothing is sent or spent.
+#[test]
+fn a_key_removed_through_a_run_stops_being_spent_by_every_run_and_the_app() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = Engine::shared(craft_anything_engine::testing::session(), Vec::new());
+    let worker = |name: &str| {
+        let ws = Workspace::create(dir.path(), name, "Make a game", TargetRef::None).unwrap();
+        let mut w = check_worker(&ws, false);
+        w.engine = app.for_a_run(craft_anything_engine::Session::default);
+        w.attach(&ws).unwrap();
+        (ws, w)
+    };
+    let ((_, mut a), (ws_b, mut b)) = (worker("a"), worker("b"));
+    assert_eq!(app.session().ext.get::<InboxDir>().unwrap().0, ws_b.inbox_dir(), "the app still shows the project");
+    let store = crate::KeyStore::file_only(dir.path().join("keys.toml"));
+    store.set(crate::keys::FAL_KEY, "k-1").unwrap();
+    a.load_asset_keys(&store);
+    b.load_asset_keys(&store);
+    assert!(a.assets && b.assets);
+    let call = |e: &Engine| e.call("assets_image_generate", json!({"prompt": "a crate", "save_as": "crate.png"}), CallOptions::new(Caller::Ui)).err().unwrap();
+    assert_eq!(call(&a.engine).code, ErrorCode::NoPermission, "past the key check");
+
+    store.delete(crate::keys::FAL_KEY).unwrap();
+    crate::keys::refresh_loaded(&mut a.engine.session(), &a.engine, &store);
+    // With no FAL_KEY in this test's environment the key is gone; with one, it stays set up.
+    if std::env::var_os("FAL_KEY").is_none() {
+        for (e, who) in [(&a.engine, "the run that removed it"), (&b.engine, "a run beside it"), (&app, "the app")] {
+            assert_eq!(call(e).code, ErrorCode::BadSettings, "{who} stops spending it, at its next call too");
+        }
+        assert_eq!(call(&a.engine).code, ErrorCode::BadSettings, "the app's older copy doesn't bring it back");
+    }
+
+    // A key saved in the app reaches the runs as well.
+    store.set(crate::keys::FAL_KEY, "k-2").unwrap();
+    crate::keys::refresh_loaded(&mut app.session(), &app, &store);
+    assert_eq!(call(&b.engine).code, ErrorCode::NoPermission);
+}
+
+#[test]
+fn only_a_run_that_would_use_the_apps_session_gets_its_own_engine() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ws = Workspace::create(dir.path(), "x", "Make a game", TargetRef::None).unwrap();
+    let hub_with = |roles: &str| {
+        let mut s = craft_anything_engine::testing::session();
+        s.settings.ai = toml::from_str(&format!(
+            "{roles}[[backends]]\nname = \"Agent\"\nkind = \"agent_cli\"\nmodel = \"claude-code\"\n[[backends]]\nname = \"Key\"\nkind = \"openrouter\"\nmodel = \"m\"\n"
+        ))
+        .unwrap();
+        AiHub::new(Arc::new(Engine::new(s)))
+    };
+    let opts = |message: Option<&str>| RunOptions { message: message.map(str::to_string), ..RunOptions::default() };
+    let hub = hub_with("");
+    let cfg = hub.config();
+    let (agent, key) = (cfg.get("Agent").unwrap(), cfg.get("Key").unwrap());
+    assert!(super::needs_its_own_engine(&hub, key, &ws, &opts(None)));
+    assert!(!super::needs_its_own_engine(&hub, agent, &ws, &opts(None)));
+
+    let hub = hub_with("[roles]\nextractor = \"Key\"\n");
+    assert!(super::needs_its_own_engine(&hub, agent, &ws, &opts(None)), "a fresh study may use the Extractor");
+    std::fs::create_dir_all(ws.capture_dir()).unwrap();
+    ws.manifest.capture_deep = Some(true);
+    assert!(!super::needs_its_own_engine(&hub, agent, &ws, &opts(Some("make it blue"))), "a follow-up doesn't");
+}
+
 /// #923: with OpenRouter as the builder, every asset call said "No fal.ai key" with one saved. The
 /// project hasn't turned on generated assets, so nothing is sent or spent.
 #[test]

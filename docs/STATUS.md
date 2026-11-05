@@ -818,7 +818,8 @@ launch or preview was run for this documentation correction.
   picture of its window and its UI tree (Windows and macOS); it isn't driven or watched over time.
 - Several projects build at once (`[build] parallel`, 2 by default; Settings → Builds); more wait
   their turn. Queued builds start on their own as places come free, from MCP too. A build with an
-  API key works alone, for now: it shares the app's session, so others wait for it and it for them.
+  API key has an engine of its own, which takes on changes made in the app before each tool call;
+  a key saved or removed in the app or through any build reaches every build at its next call.
 - Engine gaps from the audit: Frida session tools are partly simulated; imports outside the
   argument-count table show only the arguments set in the calling block. See tool-status.md.
 

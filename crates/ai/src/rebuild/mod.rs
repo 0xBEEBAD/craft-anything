@@ -286,6 +286,8 @@ impl RebuildRun {
             in_mode: saved_in_mode || transcript_in_mode,
             elsewhere: (ws.manifest.agent_session.is_some() && !saved_in_mode) || (ws.transcript_path().is_file() && !transcript_in_mode),
         };
+        let own_engine = needs_its_own_engine(hub, &entry, &ws, &opts).then(|| hub.for_a_run(opts.clean_room));
+        let hub = own_engine.as_ref().unwrap_or(hub);
         // An API backend builds with our own agent loop and the Build tools; its conversation is
         // kept in the project and continued by follow-ups (a fresh build starts a new one).
         let api = match entry.config.kind {
@@ -671,26 +673,35 @@ impl Worker {
 
     /// An API backend's builder runs its tools in this session, not in a tool server that loads the
     /// keys itself (#923). Read on the worker because the keychain can block, and for each run so a
-    /// key saved outside the app since the last one counts. The session stays held through the
-    /// read, so a key removed meanwhile can't be put back by keys read before it went. What the
+    /// key saved outside the app since the last one counts. They're shared with the app's engine
+    /// and the runs beside it, so a key saved or removed in any of them updates all
+    /// ([`Engine::load_asset_keys`]), and keys read before a change can't land after it. What the
     /// brief says about assets comes from the same read, so the two agree.
     fn load_asset_keys(&mut self, store: &crate::KeyStore) {
         let mut session = self.engine.session();
         session.label("Load the asset keys");
         let providers = session.ext.get::<craft_anything_engines::assets::AssetProviders>().map(|p| p.as_ref().clone()).unwrap_or_default();
-        let keys = crate::keys::asset_keys(store, &providers);
+        let keys = self.engine.load_asset_keys(&mut session, || crate::keys::asset_keys(store, &providers));
         // The brief offers the built-in models, so a key for another provider doesn't count.
         self.assets = craft_anything_engines::assets::AssetProviders::built_in().ids().into_iter().any(|id| keys.get(id).is_some());
-        session.ext.insert(Arc::new(keys));
     }
 
-    /// Point the engine at this workspace: its investigation project and inbox.
+    /// The engine whose session the app shows: the app's, beside a run with an engine of its own.
+    fn shown(&self) -> Arc<Engine> {
+        self.engine.app().unwrap_or_else(|| self.engine.clone())
+    }
+
+    /// Point the engine at this workspace: its investigation project and inbox. A run with an
+    /// engine of its own points the app's session there too, for what the app shows.
     fn attach(&self, ws: &Workspace) -> Result<(), ToolError> {
         let dir = ws.investigation_dir();
         let project = Project::open(&dir).or_else(|_| Project::create(&dir, &ws.manifest.name, Purpose::default()))?;
-        let mut s = self.engine.session();
-        s.open_project(project)?;
-        s.ext.insert(Arc::new(InboxDir(ws.inbox_dir())));
+        let app = self.engine.app();
+        for engine in app.iter().chain([&self.engine]) {
+            let mut s = engine.session();
+            s.open_project(project.clone())?;
+            s.ext.insert(Arc::new(InboxDir(ws.inbox_dir())));
+        }
         Ok(())
     }
 
@@ -1351,7 +1362,7 @@ impl Worker {
             for e in agent.poll() {
                 refresh |= matches!(e, AgentEvent::ToolFinished { .. });
                 if matches!(e, AgentEvent::TurnDone { .. }) {
-                    refresh_investigation(&mut self.engine.session(), ws);
+                    refresh_investigation(&mut self.shown().session(), ws);
                     refresh = false;
                 }
                 match &e {
@@ -1398,7 +1409,7 @@ impl Worker {
                     return Ok(reply);
                 }
             }
-            if refresh && let Some(mut session) = self.engine.try_session() {
+            if refresh && let Some(mut session) = self.shown().try_session() {
                 refresh_investigation(&mut session, ws);
                 refresh = false;
             }
@@ -1604,6 +1615,16 @@ const CHECK_BEFORE_REPLYING: &str = " Before you reply, check your build again w
 
 /// The backend the person chose for this project, while it's still set up and on (else the
 /// default builds it).
+/// Whether this run's tools would run in the app's session: its Builder is an API backend, or the
+/// Extractor that only works on a fresh study is. That session points at one project at a time, so
+/// builds beside each other would send their files and asset spending to the wrong one. Agent apps
+/// have a tool server of their own.
+fn needs_its_own_engine(hub: &AiHub, builder: &crate::BackendEntry, ws: &Workspace, opts: &RunOptions) -> bool {
+    let fresh = opts.message.is_none() || !capture_in_mode(ws, run_deep_mode(hub, opts));
+    let in_session = |e: &crate::BackendEntry| e.config.kind != BackendKind::AgentCli;
+    in_session(builder) || (fresh && hub.chosen(Role::Extractor).and_then(|n| hub.config().get(&n).cloned()).is_some_and(|e| in_session(&e)))
+}
+
 pub fn project_builder<'a>(cfg: &crate::AiConfig, ws: &'a Workspace) -> Option<&'a str> {
     ws.manifest.builder.as_deref().filter(|n| cfg.get(n).is_some_and(|b| b.config.enabled))
 }

@@ -494,6 +494,16 @@ impl AiHub {
         AiHub { engine, settings_path: Some(settings_path), keys, backend_edits: Mutex::new(()) }
     }
 
+    /// This hub with an engine of its own for one run (see [`Engine::for_a_run`]). While the
+    /// session is busy it starts from the saved settings, in the run's mode when the caller knows it.
+    pub(crate) fn for_a_run(&self, clean_room: Option<bool>) -> Self {
+        let busy = || {
+            let config_dir = self.settings_path.as_deref().and_then(std::path::Path::parent).map(std::path::Path::to_path_buf);
+            craft_anything_engine::Session::for_a_run_from(Settings::load_from(&self.settings_path()), config_dir, clean_room.map(|c| !c))
+        };
+        AiHub { engine: self.engine.for_a_run(busy), settings_path: self.settings_path.clone(), keys: self.keys.clone(), backend_edits: Mutex::new(()) }
+    }
+
     fn settings_path(&self) -> PathBuf {
         self.settings_path.clone().unwrap_or_else(Settings::path)
     }
@@ -1000,7 +1010,7 @@ impl AiHub {
     /// See [`keys::refresh_loaded`]: for callers that don't hold the session. It can wait for a
     /// running tool, so never call it from the UI thread or a tool.
     pub fn refresh_loaded_asset_keys(&self) {
-        keys::refresh_loaded(&mut self.engine.session(), &self.keys);
+        keys::refresh_loaded(&mut self.engine.session(), &self.engine, &self.keys);
     }
 
     /// The provider's key is stored or in its environment variable.

@@ -117,7 +117,15 @@ pub struct Engine {
     /// the session, with the project root it belongs to. Taken in whenever the session is next
     /// locked (see [`Engine::settle`]). Locked only briefly, and never while waiting for the session.
     pending: Mutex<Vec<(Option<std::path::PathBuf>, craft_anything_evidence::Evidence)>>,
+    /// The engine this one works beside ([`Engine::for_a_run`]).
+    app: Option<std::sync::Weak<Engine>>,
+    /// The asset keys this engine and the runs beside it spend from, once a run loaded them. Kept
+    /// outside every session's lock, so a key saved or removed through any of them reaches the rest
+    /// at their next tool call, and nobody waits for a busy session to say so (#943 review).
+    asset_keys: AssetKeysCell,
 }
+
+type AssetKeysCell = std::sync::Arc<Mutex<Option<std::sync::Arc<tools::asset_tools::AssetKeys>>>>;
 
 /// A handle to the engine a tool runs in, for tools that start work which calls back into it (a
 /// rebuild run). Only set on engines made with [`Engine::shared`]; it never keeps the engine alive.
@@ -125,7 +133,7 @@ pub struct EngineRef(pub std::sync::Weak<Engine>);
 
 impl Engine {
     pub fn new(session: Session) -> Self {
-        Engine { registry: Registry::with_all_tools(), session: Mutex::new(session), pending: Mutex::new(Vec::new()) }
+        Engine { registry: Registry::with_all_tools(), session: Mutex::new(session), pending: Mutex::new(Vec::new()), app: None, asset_keys: AssetKeysCell::default() }
     }
 
     /// The engine as most apps use it: shared, with tools from higher layers (`extra`, e.g. the
@@ -144,8 +152,48 @@ impl Engine {
         std::sync::Arc::new_cyclic(|me| {
             let mut session = session;
             session.ext.insert(std::sync::Arc::new(EngineRef(me.clone())));
-            Engine { registry: Registry::new(tools).with_runtime(runtime), session: Mutex::new(session), pending: Mutex::new(Vec::new()) }
+            Engine { registry: Registry::new(tools).with_runtime(runtime), session: Mutex::new(session), pending: Mutex::new(Vec::new()), app: None, asset_keys: AssetKeysCell::default() }
         })
+    }
+
+    /// An engine of its own for work whose tools point its session at one project: the same tools,
+    /// with a session that takes on the person's changes here before each tool call
+    /// ([`Session::follow`]). It's what lets two API-key builds work at once. Never waits: while
+    /// this session is busy (a tool starting the run holds it), the run starts from `busy` (the
+    /// saved settings) and catches up at its first tool call that finds this one free.
+    pub fn for_a_run(self: &std::sync::Arc<Self>, busy: impl FnOnce() -> Session) -> std::sync::Arc<Engine> {
+        let session = self.try_session().map(|s| s.for_a_run()).unwrap_or_else(busy);
+        let (registry, asset_keys) = (self.registry.clone(), self.asset_keys.clone());
+        std::sync::Arc::new_cyclic(|me| {
+            let mut session = session;
+            session.ext.insert(std::sync::Arc::new(EngineRef(me.clone())));
+            Engine { registry, session: Mutex::new(session), pending: Mutex::new(Vec::new()), app: Some(std::sync::Arc::downgrade(self)), asset_keys }
+        })
+    }
+
+    /// Load the asset keys this engine and the runs beside it spend from, and use them in
+    /// `session` (this engine's, which the caller holds). `read` runs under the keys' own lock, so
+    /// keys read before a change can't land after it.
+    pub fn load_asset_keys(
+        &self,
+        session: &mut Session,
+        read: impl FnOnce() -> tools::asset_tools::AssetKeys,
+    ) -> std::sync::Arc<tools::asset_tools::AssetKeys> {
+        let mut loaded = self.asset_keys.lock().unwrap_or_else(PoisonError::into_inner);
+        let keys = std::sync::Arc::new(read());
+        *loaded = Some(keys.clone());
+        session.ext.insert(keys.clone());
+        keys
+    }
+
+    /// A run here (or beside this engine) loaded asset keys.
+    pub fn asset_keys_loaded(&self) -> bool {
+        self.asset_keys.lock().unwrap_or_else(PoisonError::into_inner).is_some()
+    }
+
+    /// The engine this one works beside, if it was made with [`Engine::for_a_run`].
+    pub fn app(&self) -> Option<std::sync::Arc<Engine>> {
+        self.app.as_ref().and_then(std::sync::Weak::upgrade)
     }
 
     pub fn registry(&self) -> &Registry {
@@ -288,6 +336,15 @@ impl Engine {
             }
         };
         session.label(spec.id);
+        // Never waits: if the app's session is busy, this call goes by what it last saw.
+        if let Some(app) = self.app()
+            && let Some(app) = app.try_session()
+        {
+            session.follow(&app);
+        }
+        if let Some(keys) = self.asset_keys.lock().unwrap_or_else(PoisonError::into_inner).clone() {
+            session.ext.insert(keys);
+        }
         if session.clean_room() && !clean_room::allows(spec.id) {
             return Err(clean_room::refusal(spec.id));
         }
@@ -397,7 +454,7 @@ mod tests {
         session.settings.engines.tools.chromium = Some(std::env::current_exe().unwrap());
         let mut specs = tools::all();
         specs.iter_mut().find(|s| s.id == tools::site_sign_in::SIGN_IN_TOOL).unwrap().run = run;
-        std::sync::Arc::new(Engine { registry: Registry::new(specs), session: Mutex::new(session), pending: Mutex::new(Vec::new()) })
+        std::sync::Arc::new(Engine { registry: Registry::new(specs), session: Mutex::new(session), pending: Mutex::new(Vec::new()), app: None, asset_keys: AssetKeysCell::default() })
     }
 
     #[test]
@@ -609,6 +666,66 @@ mod tests {
         let err = e.call("web_site_open", serde_json::json!({"url": "https://example.com"}), CallOptions::new(Caller::Cli)).unwrap_err();
         assert_eq!(err.code, ErrorCode::EngineMissing);
         assert!(err.message.contains("isn't there") && err.message.contains("brave"), "{}", err.message);
+    }
+
+    /// Two API-key builds in one session wrote into whichever project started last.
+    #[test]
+    fn runs_with_their_own_engines_keep_to_their_own_projects() {
+        use crate::inbox::InboxDir;
+        use crate::workspace::{TargetRef, Workspace};
+        let d = tempfile::tempdir().unwrap();
+        let app = Engine::shared(crate::testing::session(), Vec::new());
+        let start = |name: &str| {
+            let ws = Workspace::create(d.path(), name, "A game", TargetRef::None).unwrap();
+            let run = app.for_a_run(Session::default);
+            run.session().ext.insert(std::sync::Arc::new(InboxDir(ws.inbox_dir())));
+            (ws, run)
+        };
+        let ((ws_a, a), (ws_b, b)) = (start("A"), start("B"));
+        for (run, who) in [(&a, "a"), (&b, "b")] {
+            run.call(
+                "build_file_write",
+                serde_json::json!({"path": "app/who.txt", "content": who}),
+                CallOptions::new(Caller::Mcp).with_consent(Consent::Granted),
+            )
+            .unwrap();
+        }
+        assert_eq!(std::fs::read_to_string(ws_a.app_dir().join("who.txt")).unwrap(), "a");
+        assert_eq!(std::fs::read_to_string(ws_b.app_dir().join("who.txt")).unwrap(), "b");
+        assert!(app.session().ext.get::<InboxDir>().is_none(), "the app's session isn't pointed anywhere by them");
+    }
+
+    /// What the person changes in the app reaches a run that's working: settings, a removed key,
+    /// and what they've allowed for its project.
+    #[test]
+    fn a_run_with_its_own_engine_takes_on_changes_made_in_the_app() {
+        use crate::project::{Project, Purpose};
+        use crate::tools::asset_tools::AssetKeys;
+        let d = tempfile::tempdir().unwrap();
+        let project = Project::create(d.path(), "A", Purpose::default()).unwrap();
+        let app = Engine::shared(crate::testing::session(), Vec::new());
+        let run = app.for_a_run(Session::default);
+        run.load_asset_keys(&mut run.session(), || AssetKeys([("fal".to_string(), "k-1".to_string())].into()));
+        assert!(app.asset_keys_loaded(), "the app's engine goes by them too");
+        assert!(std::sync::Arc::ptr_eq(&run.app().unwrap(), &app));
+        let (mut with_app, mut with_run) = (project.clone(), project);
+        with_app.meta.allowed_tools.clear();
+        with_run.meta.allowed_tools.clear();
+        app.session().project = Some(with_app);
+        run.session().project = Some(with_run);
+
+        let auto = !app.session().settings.auto_mode;
+        {
+            let mut s = app.session();
+            s.settings.auto_mode = auto;
+            app.load_asset_keys(&mut s, AssetKeys::default);
+            s.project.as_mut().unwrap().meta.allowed_tools.push("some_tool".into());
+        }
+        let _ = run.call("core_session_show", Value::Null, CallOptions::new(Caller::Cli));
+        let s = run.session();
+        assert_eq!(s.settings.auto_mode, auto);
+        assert_eq!(s.ext.get::<AssetKeys>().unwrap().get("fal"), None, "a removed key stops being spent");
+        assert!(s.project.as_ref().unwrap().is_allowed("some_tool"));
     }
 
     #[test]
