@@ -1078,6 +1078,8 @@ Owner: open · Status: in progress
       only in argv; `hermes chat -Q --query-file -` reads it from stdin, but that is the chat
       path, not `-z`'s one-shot run, so check what it prints and approves before moving to it.
       For the others, find in their source whether they read a message from stdin or a file
+- [ ] Maki: `maki -p` with no prompt argument reads the message from stdin; send it there (#402)
+      — claimed: FuryNocturn, branch feature/r2.2-maki-message-on-stdin
 - [ ] A note sent during a build reaches the builder at its next step on other coding agents with
       tool hooks, and on the API-backend loop between tool calls (Claude Code only today)
 - [ ] Session copies for other agents that keep sessions (ACP agents' `session/load`) (#451)
