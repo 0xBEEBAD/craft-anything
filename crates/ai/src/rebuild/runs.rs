@@ -74,7 +74,7 @@ impl RunSet {
                 ToolError::new(ErrorCode::BadInput, "This project is already building.").with_remediation("Add to it while it works, or stop it first.")
             );
         }
-        if self.active() < self.limit {
+        if self.active() < self.limit && self.queue.is_empty() {
             let root = ws.root.clone();
             let run = (self.starter)(hub, ws, opts)?;
             self.runs.insert(root, run);
@@ -266,6 +266,25 @@ mod tests {
         assert_eq!(set.stop(&a.root), Stopped::Nothing);
         set.stop_all();
         assert!(set.position(&a.root).is_none());
+    }
+
+    /// #943 review: a place that came free before the queue moved goes to the run waiting first.
+    #[test]
+    fn a_new_run_waits_behind_one_already_queued() {
+        let d = tempfile::tempdir().unwrap();
+        let ws = |n: &str| Workspace::create(d.path(), n, "A game", TargetRef::None).unwrap();
+        let (a, c, e) = (ws("A"), ws("C"), ws("E"));
+        let fake = StandIns::new();
+        let hub = hub();
+        let mut set = RunSet::new(1).with_starter(fake.starter());
+        set.start(&hub, a.clone(), RunOptions::default()).unwrap();
+        assert_eq!(set.start(&hub, c.clone(), RunOptions::default()).unwrap(), Started::Queued { position: 1 });
+        fake.finish(&a.root);
+        assert_eq!(set.active(), 0, "A's place is free before anyone polls");
+        assert_eq!(set.start(&hub, e.clone(), RunOptions::default()).unwrap(), Started::Queued { position: 2 });
+        set.poll(&hub);
+        assert_eq!(fake.started(), [a.root.clone(), c.root.clone()], "C goes first");
+        set.stop_all();
     }
 
     #[test]

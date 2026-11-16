@@ -2919,7 +2919,14 @@ fn a_key_removed_through_a_run_stops_being_spent_by_every_run_and_the_app() {
         (ws, w)
     };
     let ((_, mut a), (ws_b, mut b)) = (worker("a"), worker("b"));
-    assert_eq!(app.session().ext.get::<InboxDir>().unwrap().0, ws_b.inbox_dir(), "the app still shows the project");
+    let shown = app.session();
+    assert_eq!(shown.project.as_ref().unwrap().root, ws_b.investigation_dir(), "the app still shows the project");
+    // A run in the app's session beside them would post its questions to their inbox (#943 review).
+    assert!(shown.ext.get::<InboxDir>().is_none(), "their inbox stays theirs");
+    drop(shown);
+    // The app asks in a project of its own, as a run working in its session would.
+    let ws_c = Workspace::create(dir.path(), "c", "Make a game", TargetRef::None).unwrap();
+    app.session().ext.insert(Arc::new(InboxDir(ws_c.inbox_dir())));
     let store = crate::KeyStore::file_only(dir.path().join("keys.toml"));
     store.set(crate::keys::FAL_KEY, "k-1").unwrap();
     a.load_asset_keys(&store);
@@ -2960,14 +2967,13 @@ fn only_a_run_that_would_use_the_apps_session_gets_its_own_engine() {
     let hub = hub_with("");
     let cfg = hub.config();
     let (agent, key) = (cfg.get("Agent").unwrap(), cfg.get("Key").unwrap());
-    assert!(super::needs_its_own_engine(&hub, key, &ws, &opts(None)));
-    assert!(!super::needs_its_own_engine(&hub, agent, &ws, &opts(None)));
+    assert!(super::needs_its_own_engine(&hub, key, None, &ws, &opts(None)));
+    assert!(!super::needs_its_own_engine(&hub, agent, None, &ws, &opts(None)));
 
-    let hub = hub_with("[roles]\nextractor = \"Key\"\n");
-    assert!(super::needs_its_own_engine(&hub, agent, &ws, &opts(None)), "a fresh study may use the Extractor");
+    assert!(super::needs_its_own_engine(&hub, agent, Some(key), &ws, &opts(None)), "a fresh study may use the Extractor");
     std::fs::create_dir_all(ws.capture_dir()).unwrap();
     ws.manifest.capture_deep = Some(true);
-    assert!(!super::needs_its_own_engine(&hub, agent, &ws, &opts(Some("make it blue"))), "a follow-up doesn't");
+    assert!(!super::needs_its_own_engine(&hub, agent, Some(key), &ws, &opts(Some("make it blue"))), "a follow-up doesn't");
 }
 
 /// #923: with OpenRouter as the builder, every asset call said "No fal.ai key" with one saved. The

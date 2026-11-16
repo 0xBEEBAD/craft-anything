@@ -133,7 +133,13 @@ pub struct EngineRef(pub std::sync::Weak<Engine>);
 
 impl Engine {
     pub fn new(session: Session) -> Self {
-        Engine { registry: Registry::with_all_tools(), session: Mutex::new(session), pending: Mutex::new(Vec::new()), app: None, asset_keys: AssetKeysCell::default() }
+        Engine {
+            registry: Registry::with_all_tools(),
+            session: Mutex::new(session),
+            pending: Mutex::new(Vec::new()),
+            app: None,
+            asset_keys: AssetKeysCell::default(),
+        }
     }
 
     /// The engine as most apps use it: shared, with tools from higher layers (`extra`, e.g. the
@@ -152,7 +158,13 @@ impl Engine {
         std::sync::Arc::new_cyclic(|me| {
             let mut session = session;
             session.ext.insert(std::sync::Arc::new(EngineRef(me.clone())));
-            Engine { registry: Registry::new(tools).with_runtime(runtime), session: Mutex::new(session), pending: Mutex::new(Vec::new()), app: None, asset_keys: AssetKeysCell::default() }
+            Engine {
+                registry: Registry::new(tools).with_runtime(runtime),
+                session: Mutex::new(session),
+                pending: Mutex::new(Vec::new()),
+                app: None,
+                asset_keys: AssetKeysCell::default(),
+            }
         })
     }
 
@@ -454,7 +466,13 @@ mod tests {
         session.settings.engines.tools.chromium = Some(std::env::current_exe().unwrap());
         let mut specs = tools::all();
         specs.iter_mut().find(|s| s.id == tools::site_sign_in::SIGN_IN_TOOL).unwrap().run = run;
-        std::sync::Arc::new(Engine { registry: Registry::new(specs), session: Mutex::new(session), pending: Mutex::new(Vec::new()), app: None, asset_keys: AssetKeysCell::default() })
+        std::sync::Arc::new(Engine {
+            registry: Registry::new(specs),
+            session: Mutex::new(session),
+            pending: Mutex::new(Vec::new()),
+            app: None,
+            asset_keys: AssetKeysCell::default(),
+        })
     }
 
     #[test]

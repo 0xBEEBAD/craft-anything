@@ -286,7 +286,10 @@ impl RebuildRun {
             in_mode: saved_in_mode || transcript_in_mode,
             elsewhere: (ws.manifest.agent_session.is_some() && !saved_in_mode) || (ws.transcript_path().is_file() && !transcript_in_mode),
         };
-        let own_engine = needs_its_own_engine(hub, &entry, &ws, &opts).then(|| hub.for_a_run(opts.clean_room));
+        // Read once: whether the run gets an engine of its own and whether it starts the extractor
+        // must agree, or an API extractor would work in the app's session.
+        let extractor_entry = hub.chosen(Role::Extractor).and_then(|n| cfg.get(&n).cloned());
+        let own_engine = needs_its_own_engine(hub, &entry, extractor_entry.as_ref(), &ws, &opts).then(|| hub.for_a_run(opts.clean_room));
         let hub = own_engine.as_ref().unwrap_or(hub);
         // An API backend builds with our own agent loop and the Build tools; its conversation is
         // kept in the project and continued by follow-ups (a fresh build starts a new one).
@@ -306,7 +309,7 @@ impl RebuildRun {
         // A chosen extractor (an API backend, e.g. Kimi K3) takes a game's files out after a fresh
         // study; the run only uses it in Deep mode on a game (see Worker::extract).
         let fresh = opts.message.is_none() || !capture_in_mode(&ws, run_deep);
-        let extractor = match hub.chosen(Role::Extractor).and_then(|n| hub.config().get(&n).cloned()) {
+        let extractor = match extractor_entry {
             Some(e) if fresh && e.config.kind != BackendKind::AgentCli && !clean_room => {
                 let _ = std::fs::remove_file(ws.root.join(EXTRACT_TRANSCRIPT));
                 Some((e.config.name.clone(), hub.start_extractor(&e, opts.beginner, Some(ws.root.join(EXTRACT_TRANSCRIPT)))?))
@@ -692,16 +695,18 @@ impl Worker {
     }
 
     /// Point the engine at this workspace: its investigation project and inbox. A run with an
-    /// engine of its own points the app's session there too, for what the app shows.
+    /// engine of its own opens the project in the app's session too, for what the app shows, as
+    /// a run in that session does. Not its inbox: none of this run's tools ask there, and a run
+    /// working in the app's session beside it would post its questions to this project (#943).
     fn attach(&self, ws: &Workspace) -> Result<(), ToolError> {
         let dir = ws.investigation_dir();
         let project = Project::open(&dir).or_else(|_| Project::create(&dir, &ws.manifest.name, Purpose::default()))?;
-        let app = self.engine.app();
-        for engine in app.iter().chain([&self.engine]) {
-            let mut s = engine.session();
-            s.open_project(project.clone())?;
-            s.ext.insert(Arc::new(InboxDir(ws.inbox_dir())));
+        if let Some(app) = self.engine.app() {
+            app.session().open_project(project.clone())?;
         }
+        let mut s = self.engine.session();
+        s.open_project(project)?;
+        s.ext.insert(Arc::new(InboxDir(ws.inbox_dir())));
         Ok(())
     }
 
@@ -1619,10 +1624,10 @@ const CHECK_BEFORE_REPLYING: &str = " Before you reply, check your build again w
 /// Extractor that only works on a fresh study is. That session points at one project at a time, so
 /// builds beside each other would send their files and asset spending to the wrong one. Agent apps
 /// have a tool server of their own.
-fn needs_its_own_engine(hub: &AiHub, builder: &crate::BackendEntry, ws: &Workspace, opts: &RunOptions) -> bool {
+fn needs_its_own_engine(hub: &AiHub, builder: &crate::BackendEntry, extractor: Option<&crate::BackendEntry>, ws: &Workspace, opts: &RunOptions) -> bool {
     let fresh = opts.message.is_none() || !capture_in_mode(ws, run_deep_mode(hub, opts));
     let in_session = |e: &crate::BackendEntry| e.config.kind != BackendKind::AgentCli;
-    in_session(builder) || (fresh && hub.chosen(Role::Extractor).and_then(|n| hub.config().get(&n).cloned()).is_some_and(|e| in_session(&e)))
+    in_session(builder) || (fresh && extractor.is_some_and(in_session))
 }
 
 pub fn project_builder<'a>(cfg: &crate::AiConfig, ws: &'a Workspace) -> Option<&'a str> {
