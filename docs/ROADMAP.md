@@ -2207,6 +2207,7 @@ Gaps found while using the app for real projects.
       so at 2× zoom in the smallest window (760×520, 380×260 points) its tab list starts off the
       left edge and the dialog runs off the bottom. Fit the dialog to the window, with the tab
       list scrolling when it must (found in #1301's review)
+      — claimed: MacallanTheRoot, branch bugfix/r2.9-responsive-settings-dialog
 - [x] Simple and Advanced use one text size and spacing: switching modes changes what is shown, not
       how big everything is (Simple set 16 pt text and roomier controls, Advanced 13 pt, so the
       whole window seemed to zoom). Zoom (Cmd/Ctrl + / −) stays the way to make everything bigger.
