@@ -286,11 +286,12 @@ impl RebuildRun {
             in_mode: saved_in_mode || transcript_in_mode,
             elsewhere: (ws.manifest.agent_session.is_some() && !saved_in_mode) || (ws.transcript_path().is_file() && !transcript_in_mode),
         };
-        // Read once: whether the run gets an engine of its own and whether it starts the extractor
-        // must agree, or an API extractor would work in the app's session.
         let extractor_entry = hub.chosen(Role::Extractor).and_then(|n| cfg.get(&n).cloned());
-        let own_engine = needs_its_own_engine(hub, &entry, extractor_entry.as_ref(), &ws, &opts).then(|| hub.for_a_run(opts.clean_room));
-        let hub = own_engine.as_ref().unwrap_or(hub);
+        // Every run works in an engine of its own, in the mode it starts in. The app's session points
+        // at one project at a time, so a run working in it beside another would send its files,
+        // journal and asset spending to the other's project.
+        let run_hub = hub.for_a_run(run_deep);
+        let hub = &run_hub;
         // An API backend builds with our own agent loop and the Build tools; its conversation is
         // kept in the project and continued by follow-ups (a fresh build starts a new one).
         let api = match entry.config.kind {
@@ -1620,16 +1621,6 @@ const CHECK_BEFORE_REPLYING: &str = " Before you reply, check your build again w
 
 /// The backend the person chose for this project, while it's still set up and on (else the
 /// default builds it).
-/// Whether this run's tools would run in the app's session: its Builder is an API backend, or the
-/// Extractor that only works on a fresh study is. That session points at one project at a time, so
-/// builds beside each other would send their files and asset spending to the wrong one. Agent apps
-/// have a tool server of their own.
-fn needs_its_own_engine(hub: &AiHub, builder: &crate::BackendEntry, extractor: Option<&crate::BackendEntry>, ws: &Workspace, opts: &RunOptions) -> bool {
-    let fresh = opts.message.is_none() || !capture_in_mode(ws, run_deep_mode(hub, opts));
-    let in_session = |e: &crate::BackendEntry| e.config.kind != BackendKind::AgentCli;
-    in_session(builder) || (fresh && extractor.is_some_and(in_session))
-}
-
 pub fn project_builder<'a>(cfg: &crate::AiConfig, ws: &'a Workspace) -> Option<&'a str> {
     ws.manifest.builder.as_deref().filter(|n| cfg.get(n).is_some_and(|b| b.config.enabled))
 }

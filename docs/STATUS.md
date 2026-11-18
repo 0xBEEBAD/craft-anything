@@ -817,8 +817,9 @@ launch or preview was run for this documentation correction.
   words. With runtime study on, the original is also started once for a
   picture of its window and its UI tree (Windows and macOS); it isn't driven or watched over time.
 - Several projects build at once (`[build] parallel`, 2 by default; Settings → Builds); more wait
-  their turn. Queued builds start on their own as places come free, from MCP too. A build with an
-  API key has an engine of its own, which takes on changes made in the app before each tool call;
+  their turn. Queued builds start on their own as places come free, from MCP too. Every build has
+  an engine of its own, which takes on changes made in the app before each tool call, except the
+  mode: a build keeps the Clean room or Deep mode it started in;
   a key saved or removed in the app or through any build reaches every build at its next call.
 - Engine gaps from the audit: Frida session tools are partly simulated; imports outside the
   argument-count table show only the arguments set in the calling block. See tool-status.md.

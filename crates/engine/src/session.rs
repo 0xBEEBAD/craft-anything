@@ -106,9 +106,10 @@ impl Session {
     }
 
     /// A session for one piece of work beside this one ([`crate::Engine::for_a_run`]): the same
-    /// settings, plugins and asset providers, and nothing open.
+    /// settings, plugins and asset providers, nothing open, and this session's mode, kept for the
+    /// whole run.
     pub fn for_a_run(&self) -> Session {
-        let mut run = Session { config_dir: self.config_dir.clone(), ..Default::default() };
+        let mut run = Session { config_dir: self.config_dir.clone(), deep_for_run: Some(!self.clean_room()), ..Default::default() };
         run.follow(self);
         run
     }
@@ -121,11 +122,11 @@ impl Session {
 
     /// Take on what the person changes in the app while this session works: settings and what
     /// they've allowed for this project. Asset keys are shared by the engines themselves
-    /// ([`crate::Engine::load_asset_keys`]).
+    /// ([`crate::Engine::load_asset_keys`]). Not the mode: a Clean room run that took on Deep mode
+    /// would read inside the original for a build recorded as Clean room.
     pub fn follow(&mut self, app: &Session) {
         use craft_anything_engines::assets::AssetProviders;
         self.settings.clone_from(&app.settings);
-        self.deep_for_run = app.deep_for_run;
         if let Some(plugins) = app.ext.get::<crate::plugins::Plugins>() {
             self.ext.insert(plugins);
         }

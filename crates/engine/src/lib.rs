@@ -746,6 +746,23 @@ mod tests {
         assert!(s.project.as_ref().unwrap().is_allowed("some_tool"));
     }
 
+    /// A run keeps the mode it started in: Deep mode turned on in the app mustn't open the Deep
+    /// tools to a Clean room run, nor Clean room close them on a Deep one midway.
+    #[test]
+    fn a_run_keeps_the_mode_it_started_in() {
+        for deep in [false, true] {
+            let mut s = crate::testing::session();
+            s.settings.deep_mode = deep;
+            let app = Engine::shared(s, Vec::new());
+            let run = app.for_a_run(Session::default);
+            app.session().settings.deep_mode = !deep;
+            let _ = run.call("core_session_show", Value::Null, CallOptions::new(Caller::Cli));
+            let s = run.session();
+            assert_eq!(s.settings.deep_mode, !deep, "the setting is still taken on");
+            assert_eq!(s.clean_room(), !deep, "but not by the run");
+        }
+    }
+
     #[test]
     fn every_engine_a_tool_needs_is_in_the_engine_table() {
         let e = Engine::new(crate::testing::session());

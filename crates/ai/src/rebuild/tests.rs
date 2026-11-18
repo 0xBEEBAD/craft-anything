@@ -2951,31 +2951,6 @@ fn a_key_removed_through_a_run_stops_being_spent_by_every_run_and_the_app() {
     assert_eq!(call(&b.engine).code, ErrorCode::NoPermission);
 }
 
-#[test]
-fn only_a_run_that_would_use_the_apps_session_gets_its_own_engine() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut ws = Workspace::create(dir.path(), "x", "Make a game", TargetRef::None).unwrap();
-    let hub_with = |roles: &str| {
-        let mut s = craft_anything_engine::testing::session();
-        s.settings.ai = toml::from_str(&format!(
-            "{roles}[[backends]]\nname = \"Agent\"\nkind = \"agent_cli\"\nmodel = \"claude-code\"\n[[backends]]\nname = \"Key\"\nkind = \"openrouter\"\nmodel = \"m\"\n"
-        ))
-        .unwrap();
-        AiHub::new(Arc::new(Engine::new(s)))
-    };
-    let opts = |message: Option<&str>| RunOptions { message: message.map(str::to_string), ..RunOptions::default() };
-    let hub = hub_with("");
-    let cfg = hub.config();
-    let (agent, key) = (cfg.get("Agent").unwrap(), cfg.get("Key").unwrap());
-    assert!(super::needs_its_own_engine(&hub, key, None, &ws, &opts(None)));
-    assert!(!super::needs_its_own_engine(&hub, agent, None, &ws, &opts(None)));
-
-    assert!(super::needs_its_own_engine(&hub, agent, Some(key), &ws, &opts(None)), "a fresh study may use the Extractor");
-    std::fs::create_dir_all(ws.capture_dir()).unwrap();
-    ws.manifest.capture_deep = Some(true);
-    assert!(!super::needs_its_own_engine(&hub, agent, Some(key), &ws, &opts(Some("make it blue"))), "a follow-up doesn't");
-}
-
 /// #923: with OpenRouter as the builder, every asset call said "No fal.ai key" with one saved. The
 /// project hasn't turned on generated assets, so nothing is sent or spent.
 #[test]
