@@ -2914,7 +2914,7 @@ fn a_key_removed_through_a_run_stops_being_spent_by_every_run_and_the_app() {
     let worker = |name: &str| {
         let ws = Workspace::create(dir.path(), name, "Make a game", TargetRef::None).unwrap();
         let mut w = check_worker(&ws, false);
-        w.engine = app.for_a_run(craft_anything_engine::Session::default);
+        w.engine = app.for_a_run(craft_anything_engine::testing::session);
         w.attach(&ws).unwrap();
         (ws, w)
     };

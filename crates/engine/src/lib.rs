@@ -695,7 +695,7 @@ mod tests {
         let app = Engine::shared(crate::testing::session(), Vec::new());
         let start = |name: &str| {
             let ws = Workspace::create(d.path(), name, "A game", TargetRef::None).unwrap();
-            let run = app.for_a_run(Session::default);
+            let run = app.for_a_run(crate::testing::session);
             run.session().ext.insert(std::sync::Arc::new(InboxDir(ws.inbox_dir())));
             (ws, run)
         };
@@ -722,7 +722,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let project = Project::create(d.path(), "A", Purpose::default()).unwrap();
         let app = Engine::shared(crate::testing::session(), Vec::new());
-        let run = app.for_a_run(Session::default);
+        let run = app.for_a_run(crate::testing::session);
         run.load_asset_keys(&mut run.session(), || AssetKeys([("fal".to_string(), "k-1".to_string())].into()));
         assert!(app.asset_keys_loaded(), "the app's engine goes by them too");
         assert!(std::sync::Arc::ptr_eq(&run.app().unwrap(), &app));
@@ -754,7 +754,7 @@ mod tests {
             let mut s = crate::testing::session();
             s.settings.deep_mode = deep;
             let app = Engine::shared(s, Vec::new());
-            let run = app.for_a_run(Session::default);
+            let run = app.for_a_run(crate::testing::session);
             app.session().settings.deep_mode = !deep;
             let _ = run.call("core_session_show", Value::Null, CallOptions::new(Caller::Cli));
             let s = run.session();
