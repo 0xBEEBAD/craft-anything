@@ -1881,6 +1881,9 @@ mod picking_up_a_build {
         b.hub.set_asset_key("fal", "k-1").unwrap();
         let ws = Workspace::create(&b.projects, "x", "Build a notes app", TargetRef::None).unwrap();
         let _ = try_it(&b, &ws);
+        // The run loads them in its own engine; the app's takes them on at its next call.
+        assert!(b.hub.engine.asset_keys_loaded());
+        let _ = b.hub.engine.call("core_session_show", serde_json::Value::Null, CallOptions::new(Caller::Cli));
         let keys = b.hub.engine.session().ext.get::<craft_anything_engine::tools::asset_tools::AssetKeys>().unwrap_or_default();
         assert_eq!(keys.get("fal"), Some("k-1"));
     }

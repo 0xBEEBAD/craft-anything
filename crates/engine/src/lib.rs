@@ -125,7 +125,15 @@ pub struct Engine {
     asset_keys: AssetKeysCell,
 }
 
-type AssetKeysCell = std::sync::Arc<Mutex<Option<std::sync::Arc<tools::asset_tools::AssetKeys>>>>;
+type AssetKeysCell = std::sync::Arc<KeysCell>;
+
+/// The asset keys in use, and a lock that loads take in turn, so the keychain is read outside
+/// the lock every tool call takes and a slow load still can't land after a newer one.
+#[derive(Default)]
+struct KeysCell {
+    loading: Mutex<()>,
+    keys: Mutex<Option<std::sync::Arc<tools::asset_tools::AssetKeys>>>,
+}
 
 /// A handle to the engine a tool runs in, for tools that start work which calls back into it (a
 /// rebuild run). Only set on engines made with [`Engine::shared`]; it never keeps the engine alive.
@@ -184,23 +192,24 @@ impl Engine {
     }
 
     /// Load the asset keys this engine and the runs beside it spend from, and use them in
-    /// `session` (this engine's, which the caller holds). `read` runs under the keys' own lock, so
-    /// keys read before a change can't land after it.
+    /// `session` (this engine's, which the caller holds). Loads take turns, so keys read before a
+    /// change can't land after it; tool calls don't wait for `read` (the keychain can be slow).
     pub fn load_asset_keys(
         &self,
         session: &mut Session,
         read: impl FnOnce() -> tools::asset_tools::AssetKeys,
     ) -> std::sync::Arc<tools::asset_tools::AssetKeys> {
-        let mut loaded = self.asset_keys.lock().unwrap_or_else(PoisonError::into_inner);
+        let turn = self.asset_keys.loading.lock().unwrap_or_else(PoisonError::into_inner);
+        turn.label("Read the asset keys");
         let keys = std::sync::Arc::new(read());
-        *loaded = Some(keys.clone());
+        *self.asset_keys.keys.lock().unwrap_or_else(PoisonError::into_inner) = Some(keys.clone());
         session.ext.insert(keys.clone());
         keys
     }
 
     /// A run here (or beside this engine) loaded asset keys.
     pub fn asset_keys_loaded(&self) -> bool {
-        self.asset_keys.lock().unwrap_or_else(PoisonError::into_inner).is_some()
+        self.asset_keys.keys.lock().unwrap_or_else(PoisonError::into_inner).is_some()
     }
 
     /// The engine this one works beside, if it was made with [`Engine::for_a_run`].
@@ -348,13 +357,13 @@ impl Engine {
             }
         };
         session.label(spec.id);
-        // Never waits: if the app's session is busy, this call goes by what it last saw.
-        if let Some(app) = self.app()
-            && let Some(app) = app.try_session()
-        {
-            session.follow(&app);
-        }
-        if let Some(keys) = self.asset_keys.lock().unwrap_or_else(PoisonError::into_inner).clone() {
+        // Never waits: if the app's session is busy, this call goes by what it last saw, except for
+        // approvals (below), which it can't then check.
+        let followed = match self.app() {
+            Some(app) => app.try_session().map(|app| session.follow(&app)).is_some(),
+            None => true,
+        };
+        if let Some(keys) = self.asset_keys.keys.lock().unwrap_or_else(PoisonError::into_inner).clone() {
             session.ext.insert(keys);
         }
         if session.clean_room() && !clean_room::allows(spec.id) {
@@ -377,7 +386,8 @@ impl Engine {
             return Err(err);
         }
         if spec.effects.needs_consent() && opts.consent != Consent::Granted {
-            let allowed = !session.settings.ask_before_running || session.project.as_ref().is_some_and(|p| p.is_allowed(spec.id));
+            // Approvals last seen aren't approvals now: the person may have turned asking back on.
+            let allowed = followed && (!session.settings.ask_before_running || session.project.as_ref().is_some_and(|p| p.is_allowed(spec.id)));
             if !allowed {
                 return Err(ToolError::new(ErrorCode::ConsentRequired, format!("{} runs code or changes a device, so it needs your OK first.", spec.title))
                     .with_remediation("Approve it when asked, or allow it for this project in Settings.")
@@ -653,6 +663,23 @@ mod tests {
         e.session().project = Some(a.clone());
         e.pending.lock().unwrap().push((Some(a.root.clone()), (*ev).clone()));
         assert!(e.session().evidence(&ev.id).is_some(), "its own project is open: recorded");
+    }
+
+    /// #943 review: a run whose app session is busy can't see whether the person turned asking
+    /// back on, so it doesn't run what needs consent on the approvals it last saw.
+    #[test]
+    fn a_run_asks_when_it_cant_read_the_apps_approvals() {
+        let mut s = crate::testing::session();
+        s.settings.ask_before_running = false;
+        let app = Engine::shared(s, Vec::new());
+        let run = app.for_a_run(crate::testing::session);
+        let p = serde_json::json!({"program": std::env::temp_dir().join("no-such-program.exe")});
+        let capture = || run.call("native_window_capture", p.clone(), CallOptions::new(Caller::Mcp));
+        assert!(capture().unwrap_err().message.contains("isn't a program file"), "the app says not to ask: past consent");
+        let busy = app.session();
+        assert_eq!(capture().unwrap_err().code, ErrorCode::ConsentRequired, "the app's session is busy");
+        drop(busy);
+        assert!(capture().unwrap_err().message.contains("isn't a program file"), "and once it's free, as before");
     }
 
     #[test]

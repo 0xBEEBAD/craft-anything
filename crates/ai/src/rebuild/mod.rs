@@ -286,7 +286,9 @@ impl RebuildRun {
             in_mode: saved_in_mode || transcript_in_mode,
             elsewhere: (ws.manifest.agent_session.is_some() && !saved_in_mode) || (ws.transcript_path().is_file() && !transcript_in_mode),
         };
-        let extractor_entry = hub.chosen(Role::Extractor).and_then(|n| cfg.get(&n).cloned());
+        // From the same read of the settings as the builder, so a change between two reads can't
+        // pair one entry's name with another's settings.
+        let extractor_entry = cfg.roles.get(crate::config::role_key(Role::Extractor)).and_then(|n| cfg.get(n)).filter(|b| b.config.enabled).cloned();
         // Every run works in an engine of its own, in the mode it starts in. The app's session points
         // at one project at a time, so a run working in it beside another would send its files,
         // journal and asset spending to the other's project.
