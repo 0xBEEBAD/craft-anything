@@ -1927,6 +1927,8 @@ Gaps found while using the app for real projects.
       (`Session::cargo_env`, empty in `testing::session()` and the demo app; a Live pin and the
       Project screen look where it says)
       — in PR #2214
+- [ ] Tests that call `outputs::built_program` or `outputs::launch` directly (the rebuild tests in
+      `crates/ai`, `toolchains.rs`) still read the process's Cargo environment; give them one too
 - [x] "Work on my project" on New project, beside "Make my own version" and "Just look inside":
       pick the folder of a project you already have, say what to change, and its files are edited
       in place, with nothing asked; the project takes the folder's name, an empty folder is
