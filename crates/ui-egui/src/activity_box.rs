@@ -151,7 +151,8 @@ fn toolbar(ui: &mut Ui, rect: egui::Rect, id: Id, look: &mut Look, run: &Rebuild
     let had_focus = ui.data(|d| d.get_temp::<bool>(focus_id)).unwrap_or(false);
     let shown = ui.ctx().animate_bool_with_time(id.with("toolbar"), !pop_out || had_focus || ui.rect_contains_pointer(rect), 0.12);
     let n = if pop_out { 3.0 } else { 2.0 };
-    let size = Vec2::new(BUTTON.height() * n + 2.0 * (n - 1.0) + 6.0, BUTTON.height() + 6.0);
+    let (gap, edge) = (theme::space::XXS, theme::space::XXS);
+    let size = Vec2::new(BUTTON.height() * n + gap * (n - 1.0) + 2.0 * edge, BUTTON.height() + 2.0 * edge);
     // Clear of the scroll bar along the right edge: a press on a button over its track also
     // scrolled the lines to where it was pressed.
     let s = &ui.spacing().scroll;
@@ -164,8 +165,8 @@ fn toolbar(ui: &mut Ui, rect: egui::Rect, id: Id, look: &mut Look, run: &Rebuild
         ui.set_opacity(shown);
         // Over the lines it covers, so the icons read against the card, not the text.
         ui.painter().rect(bar, t.radius_sm, t.raised, Stroke::new(1.0, t.card_border), egui::StrokeKind::Inside);
-        ui.spacing_mut().item_spacing.x = 2.0;
-        ui.add_space(3.0);
+        ui.spacing_mut().item_spacing.x = gap;
+        ui.add_space(edge);
         if pop_out {
             let r = icons::button(ui, "external-link", BUTTON, false, "Open in its own window");
             popped = r.clicked();
