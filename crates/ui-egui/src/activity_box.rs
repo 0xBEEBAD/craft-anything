@@ -8,7 +8,7 @@ use crate::theme::{self, Tokens};
 use crate::{CraftApp, icons, widgets};
 use craft_anything_ai::rebuild::RebuildRun;
 use craft_anything_ai::rebuild::activity::{ActivityLine, LineKind};
-use egui::{Color32, Id, Margin, RichText, Sense, Stroke, Ui, Vec2};
+use egui::{Color32, Id, RichText, Sense, Stroke, Ui, Vec2};
 use std::path::PathBuf;
 
 /// The height of one line that doesn't wrap. Rows are exactly this tall, or the scroll area
@@ -21,7 +21,7 @@ const FEWEST_LINES: f32 = 3.0;
 /// How much of the window's height it may take.
 const MOST_OF_WINDOW: f32 = 0.8;
 /// The hover buttons' size, and the grip's height.
-const BUTTON: f32 = 24.0;
+const BUTTON: theme::ControlSize = theme::ControlSize::Small;
 const GRIP: f32 = 10.0;
 
 /// How one box looks: the person's choices for it, kept while the app runs.
@@ -60,7 +60,7 @@ pub fn inline(ui: &mut Ui, run: &RebuildRun, id: Id) -> bool {
     let mut look = Look::of(ui.ctx(), id);
     let most = (ui.ctx().content_rect().height() * MOST_OF_WINDOW).max(LINE * FEWEST_LINES);
     let height = look.height.clamp(LINE * FEWEST_LINES, most);
-    let card = widgets::card(&t).inner_margin(Margin::symmetric(10, 8)).show(ui, |ui| {
+    let card = widgets::card(&t).inner_margin(theme::pad::TIGHT).show(ui, |ui| {
         ui.set_width(ui.available_width());
         lines(ui, run, id, look.wrap, height, false)
     });
@@ -151,7 +151,7 @@ fn toolbar(ui: &mut Ui, rect: egui::Rect, id: Id, look: &mut Look, run: &Rebuild
     let had_focus = ui.data(|d| d.get_temp::<bool>(focus_id)).unwrap_or(false);
     let shown = ui.ctx().animate_bool_with_time(id.with("toolbar"), !pop_out || had_focus || ui.rect_contains_pointer(rect), 0.12);
     let n = if pop_out { 3.0 } else { 2.0 };
-    let size = Vec2::new(BUTTON * n + 2.0 * (n - 1.0) + 6.0, BUTTON + 6.0);
+    let size = Vec2::new(BUTTON.height() * n + 2.0 * (n - 1.0) + 6.0, BUTTON.height() + 6.0);
     // Clear of the scroll bar along the right edge: a press on a button over its track also
     // scrolled the lines to where it was pressed.
     let s = &ui.spacing().scroll;
@@ -239,7 +239,7 @@ pub fn windows(app: &mut CraftApp, ctx: &egui::Context) {
             let embedded = class == egui::ViewportClass::EmbeddedWindow;
             let mut close = ui.input(|i| i.viewport().close_requested());
             let mut log = false;
-            let frame = if embedded { egui::Frame::new() } else { egui::Frame::new().fill(t.canvas).inner_margin(Margin::same(12)) };
+            let frame = if embedded { egui::Frame::new() } else { egui::Frame::new().fill(t.canvas).inner_margin(theme::pad::PANEL) };
             frame.show(ui, |ui| {
                 if embedded {
                     ui.set_min_size(Vec2::new(520.0, 360.0));
@@ -248,7 +248,7 @@ pub fn windows(app: &mut CraftApp, ctx: &egui::Context) {
                 // The footer's height, kept free under the lines.
                 let footer = 44.0;
                 let height = (ui.available_height() - footer).max(LINE * FEWEST_LINES);
-                let card = widgets::card(&t).inner_margin(Margin::symmetric(10, 8)).show(ui, |ui| {
+                let card = widgets::card(&t).inner_margin(theme::pad::TIGHT).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     lines(ui, run, id, look.wrap, height, true)
                 });
