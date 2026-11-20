@@ -379,8 +379,12 @@ pub struct ModelTuningDraft {
 impl ModelTuningDraft {
     /// Drop an override the selected model does not advertise before presenting its controls.
     pub fn set_choices(&mut self, choices: craft_anything_ai::model_options::ModelTuning) {
-        self.context = self.context.filter(|value| choices.context.iter().any(|choice| choice.value == *value));
         self.choices = Some(choices);
+        self.restore_context(self.context);
+    }
+
+    fn restore_context(&mut self, context: Option<craft_anything_ai::config::CliContext>) {
+        self.context = context.filter(|value| self.choices.as_ref().is_none_or(|choices| choices.context.iter().any(|choice| choice.value == *value)));
     }
 
     pub fn params(&self) -> craft_anything_ai::model_options::SetModelOptions {
@@ -1595,7 +1599,7 @@ impl CraftApp {
             let keep = self.backends.iter().any(|backend| backend.name == *name && craft_anything_ai::model_options::supported(backend))
                 && self.backend_options.get(name).and_then(|options| options.cli_model.as_ref()) == state.cli_model.as_ref();
             if keep && !state.saving {
-                state.context = self.backend_options.get(name).and_then(|options| options.cli_context);
+                state.restore_context(self.backend_options.get(name).and_then(|options| options.cli_context));
             }
             keep
         });
@@ -1616,7 +1620,7 @@ impl CraftApp {
                 if let Some(options) = self.backend_options.get(name)
                     && options.cli_model == state.cli_model
                 {
-                    state.context = options.cli_context;
+                    state.restore_context(options.cli_context);
                 }
             }
         }
@@ -2575,6 +2579,56 @@ mod backend_snapshot_tests {
         app.handle_done(delayed);
         assert!(!app.model_tuning["Copilot"].saving);
         assert_eq!(app.model_tuning["Copilot"].context, Some(Standard));
+    }
+
+    fn context_choices(values: Option<Vec<craft_anything_ai::config::CliContext>>) -> ModelTuningDraft {
+        let mut draft = tuning(craft_anything_ai::config::CliContext::Long);
+        if let Some(values) = values {
+            draft.set_choices(craft_anything_ai::model_options::ModelTuning {
+                model: "test-model".into(),
+                context: values
+                    .into_iter()
+                    .map(|value| craft_anything_ai::model_options::ModelOption { value, label: "Context".into(), description: None })
+                    .collect(),
+                reasoning: Vec::new(),
+            });
+        }
+        draft
+    }
+
+    #[test]
+    fn a_refreshed_context_respects_loaded_model_choices() {
+        use craft_anything_ai::config::CliContext::{Long, Standard};
+        for choices in [None, Some(vec![Long]), Some(vec![Standard]), Some(Vec::new())] {
+            let mut app = configured_app();
+            app.hub.set_model_options(&options(Long)).unwrap();
+            let draft = context_choices(choices);
+            let expected = draft.context;
+            app.model_tuning.insert("Copilot".into(), draft);
+            app.handle_done(jobs::Finished { job: 0, result: Ok(backends(&app.hub)) });
+            assert_eq!(app.model_tuning["Copilot"].params().context, expected);
+            assert_eq!(app.backend_options["Copilot"].cli_context, Some(Long), "discovery filters controls, not the saved configuration");
+        }
+    }
+
+    #[test]
+    fn a_settled_context_respects_loaded_model_choices() {
+        use craft_anything_ai::config::CliContext::{Long, Standard};
+        for choices in [None, Some(vec![Long]), Some(vec![Standard]), Some(Vec::new())] {
+            let mut app = configured_app();
+            let mut draft = context_choices(choices);
+            let expected = draft.context;
+            draft.context = None;
+            app.model_tuning.insert("Copilot".into(), draft);
+            app.set_model_options(craft_anything_ai::model_options::SetModelOptions { backend: "Copilot".into(), expected_cli_model: None, context: None });
+            let delayed = take_last_job(&mut app);
+            app.hub.set_model_options(&options(Long)).unwrap();
+            app.handle_done(jobs::Finished { job: 0, result: Ok(backends(&app.hub)) });
+            app.handle_done(delayed);
+            assert!(!app.model_tuning["Copilot"].saving);
+            assert_eq!(app.model_tuning["Copilot"].params().context, expected);
+            assert_eq!(app.backend_options["Copilot"].cli_context, Some(Long));
+        }
     }
 
     #[test]
