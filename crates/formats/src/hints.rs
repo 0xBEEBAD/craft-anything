@@ -134,7 +134,7 @@ pub fn detect(b: &Binary, data: &[u8]) -> Vec<Hint> {
     // Flutter / Dart
     // Android and iOS link libflutter.so / Flutter.framework; desktop builds link
     // flutter_windows.dll, libflutter_linux_gtk.so or FlutterMacOS.framework (#2227).
-    let flutter_engine = ["libflutter", "Flutter.framework", "flutter_windows.dll", "FlutterMacOS.framework"].into_iter().find_map(|n| lib(n));
+    let flutter_engine = ["libflutter", "Flutter.framework", "flutter_windows.dll", "FlutterMacOS.framework"].into_iter().find_map(lib);
     if let Some(engine) = flutter_engine {
         push(&mut out, hint("flutter", "framework", "Flutter (Dart)", "strong", format!("links the Flutter engine ({engine})")));
     } else if sym("kDartVmSnapshotData") || sym("_kDartVmSnapshotData") || sym("kDartIsolateSnapshotInstructions") {
