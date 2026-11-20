@@ -2206,8 +2206,8 @@ Gaps found while using the app for real projects.
 - [x] Settings fits a small window at high zoom: the dialog, including its frame, fits the
       viewport, with its heading and Close always in view. Narrow windows get a scrolling tab
       strip and stacked settings; wider ones keep the left rail, which scrolls when short.
-      Pages and long save errors scroll vertically. Rendered layout tests cover all seven tabs
-      at 760×520 / 2×, 900×600 and 1440×900 in English, Turkish and German, plus keyboard
+      Pages and long save errors scroll vertically. Rendered layout tests cover both Beginner
+      and Experienced modes after #1236, all seven tabs at 760×520 / 2×, 900×600 and 1440×900 in English, Turkish and German, plus keyboard
       navigation, Close, long plugin entries and resizing. Review regressions also cover populated
       server-model dropdowns and menus, measured translated API-key rows, repeated save failures
       and full-app error presentation without duplicate overlays. Resize regressions retain backend

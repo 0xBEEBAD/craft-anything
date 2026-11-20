@@ -1,4 +1,4 @@
-//! Render the real Settings modal. Locale changes stay in one test (the catalog is global).
+//! Render the real Settings modal in both modes. Locale changes stay in one test (the catalog is global).
 //! Optional evidence: CRAFT_SETTINGS_SHOTS=target/settings-after cargo test -p
 //! craft-anything-ui-egui --test responsive_settings -- --nocapture
 
@@ -18,8 +18,8 @@ const TABS: [(SettingsTab, &str, &str); 7] = [
     (SettingsTab::About, "About", "Craft Anything"),
 ];
 
-fn harness(size: egui::Vec2, zoom: f32, lang: &str) -> Harness<'static, CraftApp> {
-    let mut app = demo::app(demo::engine(Mode::Beginner, true));
+fn harness(mode: Mode, size: egui::Vec2, zoom: f32, lang: &str) -> Harness<'static, CraftApp> {
+    let mut app = demo::app(demo::engine(mode, true));
     app.settings.language = lang.into();
     app.settings.projects_dir = Some("/samples/projects with a deliberately long name for wrapping".into());
     app.state.settings_open = true;
@@ -35,7 +35,7 @@ fn harness(size: egui::Vec2, zoom: f32, lang: &str) -> Harness<'static, CraftApp
                 // Font definitions bind at the start of the next pass.
                 return;
             }
-            theme::apply(ui.ctx(), app.theme_kind(), true);
+            theme::apply(ui.ctx(), app.theme_kind());
             settings_ui::show(app, ui.ctx());
         },
         app,
@@ -53,98 +53,101 @@ fn screenshot(h: &mut Harness<'_, CraftApp>, name: &str) {
         let dir = std::path::PathBuf::from(dir);
         std::fs::create_dir_all(&dir).unwrap();
         let image = h.render().expect("render Settings");
-        image.save(dir.join(format!("{name}.png"))).unwrap();
+        image.save(dir.join(format!("{:?}-{name}.png", h.state().settings.mode))).unwrap();
     }
 }
 
 #[test]
 fn settings_fits_and_remains_usable_in_each_viewport_and_language() {
-    let mut failures = Vec::new();
-    widget_focus_survives_orientation_changes(&mut failures);
-    drafts_survive_resizing(&mut failures);
-    focused_tabs_survive_resizing(&mut failures);
-    server_model_choices_fit(&mut failures);
-    translated_key_rows_fit(&mut failures);
-    repeated_errors_return_into_view(&mut failures);
-    settings_errors_have_one_visible_copy(&mut failures);
-    // The harness receives window points at native scale 1; egui's real zoom then halves
-    // the small viewport to 380×260 logical points. Rendered PNGs remain 760×520 pixels.
-    for lang in ["en", "tr", "de"] {
-        for (name, size, zoom) in
-            [("small-2x", egui::vec2(760.0, 520.0), 2.0), ("normal", egui::vec2(900.0, 600.0), 1.0), ("desktop", egui::vec2(1440.0, 900.0), 1.0)]
-        {
-            let mut h = harness(size, zoom, lang);
-            let viewport = h.ctx.content_rect();
-            assert_eq!(viewport.size(), size / zoom);
-            for (tab, label, content) in TABS {
-                // Select every page even on the broken layout, collecting all failures before
-                // failing. The interaction checks below exercise actual clicks and keyboard input.
-                h.state_mut().state.settings_tab = tab;
-                h.run_steps(4);
-                h.get_by_label(&i18n::tr(content));
-                let dialog = modal(&h);
-                if !viewport.expand(0.5).contains_rect(dialog) {
-                    failures.push(format!("{lang}/{name}/{label}: modal {dialog:?} exceeds {viewport:?}"));
-                }
-                let selected = h.get_by_label(&i18n::tr(label)).rect();
-                if !dialog.contains_rect(selected) {
-                    failures.push(format!("{lang}/{name}/{label}: selected tab {selected:?} is outside {dialog:?}"));
-                }
-                if name == "desktop" && (dialog.width() > 900.0 || dialog.height() > 700.0) {
-                    failures.push(format!("{lang}/{name}/{label}: desktop dialog lost its usual proportions: {dialog:?}"));
-                }
-                for key in ["Settings", "Close"] {
-                    // Turkish also calls an AI's Off action "Kapat"; the header comes first.
-                    let rect = h.get_all_by_label(&i18n::tr(key)).next().expect("header control").rect();
-                    if !viewport.contains_rect(rect) {
-                        failures.push(format!("{lang}/{name}/{label}: {key} {rect:?} is offscreen"));
+    for mode in [Mode::Beginner, Mode::Experienced] {
+        let mut failures = Vec::new();
+        widget_focus_survives_orientation_changes(mode, &mut failures);
+        drafts_survive_resizing(mode, &mut failures);
+        focused_tabs_survive_resizing(mode, &mut failures);
+        server_model_choices_fit(mode, &mut failures);
+        translated_key_rows_fit(mode, &mut failures);
+        repeated_errors_return_into_view(mode, &mut failures);
+        settings_errors_have_one_visible_copy(mode, &mut failures);
+        // The harness receives window points at native scale 1; egui's real zoom then halves
+        // the small viewport to 380×260 logical points. Rendered PNGs remain 760×520 pixels.
+        for lang in ["en", "tr", "de"] {
+            for (name, size, zoom) in
+                [("small-2x", egui::vec2(760.0, 520.0), 2.0), ("normal", egui::vec2(900.0, 600.0), 1.0), ("desktop", egui::vec2(1440.0, 900.0), 1.0)]
+            {
+                let mut h = harness(mode, size, zoom, lang);
+                let viewport = h.ctx.content_rect();
+                assert_eq!(viewport.size(), size / zoom);
+                for (tab, label, content) in TABS {
+                    // Select every page even on the broken layout, collecting all failures before
+                    // failing. The interaction checks below exercise actual clicks and keyboard input.
+                    h.state_mut().state.settings_tab = tab;
+                    h.run_steps(4);
+                    h.get_by_label(&i18n::tr(content));
+                    let dialog = modal(&h);
+                    if !viewport.expand(0.5).contains_rect(dialog) {
+                        failures.push(format!("{lang}/{name}/{label}: modal {dialog:?} exceeds {viewport:?}"));
                     }
-                }
-                for role in [
-                    egui::accesskit::Role::Button,
-                    egui::accesskit::Role::CheckBox,
-                    egui::accesskit::Role::TextInput,
-                    egui::accesskit::Role::ComboBox,
-                    egui::accesskit::Role::SpinButton,
-                ] {
-                    for node in h.query_all_by_role(role) {
-                        let rect = node.rect();
-                        if TABS.iter().any(|(_, title, _)| h.query_all_by_label(&i18n::tr(title)).any(|tab| tab.rect() == rect)) {
-                            continue;
-                        }
-                        if rect.left() < dialog.left() - 0.5 || rect.right() > dialog.right() + 0.5 {
-                            failures.push(format!("{lang}/{name}/{label}: {role:?} {rect:?} exceeds dialog horizontally"));
+                    let selected = h.get_by_label(&i18n::tr(label)).rect();
+                    if !dialog.contains_rect(selected) {
+                        failures.push(format!("{lang}/{name}/{label}: selected tab {selected:?} is outside {dialog:?}"));
+                    }
+                    if name == "desktop" && (dialog.width() > 900.0 || dialog.height() > 700.0) {
+                        failures.push(format!("{lang}/{name}/{label}: desktop dialog lost its usual proportions: {dialog:?}"));
+                    }
+                    for key in ["Settings", "Close"] {
+                        // Turkish also calls an AI's Off action "Kapat"; the header comes first.
+                        let rect = h.get_all_by_label(&i18n::tr(key)).next().expect("header control").rect();
+                        if !viewport.contains_rect(rect) {
+                            failures.push(format!("{lang}/{name}/{label}: {key} {rect:?} is offscreen"));
                         }
                     }
-                }
-                // Controls and prose must fit horizontally even when their page needs vertical
-                // scrolling. Inspect the real painted text, including wrapped translated blurbs.
-                for shape in &h.output().shapes {
-                    if let egui::Shape::Text(text) = &shape.shape {
-                        // Offscreen navigation labels are legitimate inside a scrolling rail.
-                        if TABS.iter().any(|(_, title, _)| i18n::tr(title) == text.galley.text()) {
-                            continue;
-                        }
-                        let rect = text.galley.rect.translate(text.pos.to_vec2());
-                        if rect.right() > dialog.right() + 0.5 || rect.left() < dialog.left() - 0.5 {
-                            failures.push(format!("{lang}/{name}/{label}: text {:?} exceeds dialog horizontally", text.galley.text()));
+                    for role in [
+                        egui::accesskit::Role::Button,
+                        egui::accesskit::Role::CheckBox,
+                        egui::accesskit::Role::TextInput,
+                        egui::accesskit::Role::ComboBox,
+                        egui::accesskit::Role::SpinButton,
+                    ] {
+                        for node in h.query_all_by_role(role) {
+                            let rect = node.rect();
+                            if TABS.iter().any(|(_, title, _)| h.query_all_by_label(&i18n::tr(title)).any(|tab| tab.rect() == rect)) {
+                                continue;
+                            }
+                            if rect.left() < dialog.left() - 0.5 || rect.right() > dialog.right() + 0.5 {
+                                failures.push(format!("{lang}/{name}/{label}: {role:?} {rect:?} exceeds dialog horizontally"));
+                            }
                         }
                     }
+                    // Controls and prose must fit horizontally even when their page needs vertical
+                    // scrolling. Inspect the real painted text, including wrapped translated blurbs.
+                    for shape in &h.output().shapes {
+                        if let egui::Shape::Text(text) = &shape.shape {
+                            // Offscreen navigation labels are legitimate inside a scrolling rail.
+                            if TABS.iter().any(|(_, title, _)| i18n::tr(title) == text.galley.text()) {
+                                continue;
+                            }
+                            let rect = text.galley.rect.translate(text.pos.to_vec2());
+                            if rect.right() > dialog.right() + 0.5 || rect.left() < dialog.left() - 0.5 {
+                                failures.push(format!("{lang}/{name}/{label}: text {:?} exceeds dialog horizontally", text.galley.text()));
+                            }
+                        }
+                    }
+                    screenshot(&mut h, &format!("{lang}-{name}-{label}"));
                 }
-                screenshot(&mut h, &format!("{lang}-{name}-{label}"));
             }
         }
+        i18n::set_language("en");
+        assert!(failures.is_empty(), "{mode:?}: {} layout failures:\n{}", failures.len(), failures.join("\n"));
+        navigation_and_editing(mode);
+        longer_content_and_resize(mode);
+        eprintln!("{mode:?}: 63 viewport/tab/locale cases plus navigation, forms, errors and resize regressions passed");
     }
-    i18n::set_language("en");
-    assert!(failures.is_empty(), "{} layout failures:\n{}", failures.len(), failures.join("\n"));
-    navigation_and_editing();
-    longer_content_and_resize();
 }
 
-fn widget_focus_survives_orientation_changes(failures: &mut Vec<String>) {
+fn widget_focus_survives_orientation_changes(mode: Mode, failures: &mut Vec<String>) {
     let wide = theme::breakpoint::SETTINGS_RAIL + 2.0 * theme::space::XXL + 1.0;
     let narrow = wide - 2.0;
-    let mut h = harness(egui::vec2(wide, 600.0), 1.0, "en");
+    let mut h = harness(mode, egui::vec2(wide, 600.0), 1.0, "en");
     h.state_mut().state.settings_tab = SettingsTab::Ai;
     h.run_steps(4);
     h.get_by_label("Requests per minute").scroll_to_me();
@@ -172,7 +175,7 @@ fn widget_focus_survives_orientation_changes(failures: &mut Vec<String>) {
     }
     screenshot(&mut h, "review-request-rate-cursor");
     for (tab, label, _) in TABS {
-        let mut h = harness(egui::vec2(wide, 600.0), 1.0, "en");
+        let mut h = harness(mode, egui::vec2(wide, 600.0), 1.0, "en");
         let other = if tab == SettingsTab::General { SettingsTab::Safety } else { SettingsTab::General };
         h.state_mut().state.settings_tab = other;
         h.run_steps(3);
@@ -199,10 +202,10 @@ fn widget_focus_survives_orientation_changes(failures: &mut Vec<String>) {
     }
 }
 
-fn drafts_survive_resizing(failures: &mut Vec<String>) {
+fn drafts_survive_resizing(mode: Mode, failures: &mut Vec<String>) {
     let wide = theme::breakpoint::SETTINGS_RAIL + 2.0 * theme::space::XXL + 1.0;
     let narrow = wide - 2.0;
-    let mut h = harness(egui::vec2(wide, 600.0), 1.0, "en");
+    let mut h = harness(mode, egui::vec2(wide, 600.0), 1.0, "en");
     h.state_mut().state.settings_tab = SettingsTab::Ai;
     h.run_steps(4);
     h.get_by_label("Requests per minute").scroll_to_me();
@@ -237,11 +240,11 @@ fn drafts_survive_resizing(failures: &mut Vec<String>) {
     }
 }
 
-fn focused_tabs_survive_resizing(failures: &mut Vec<String>) {
+fn focused_tabs_survive_resizing(mode: Mode, failures: &mut Vec<String>) {
     for (selected, focused) in
         [(SettingsTab::General, "About"), (SettingsTab::Safety, "About"), (SettingsTab::About, "General"), (SettingsTab::About, "Safety")]
     {
-        let mut h = harness(egui::vec2(1440.0, 900.0), 1.0, "en");
+        let mut h = harness(mode, egui::vec2(1440.0, 900.0), 1.0, "en");
         h.state_mut().state.settings_tab = selected;
         h.run_steps(4);
         h.get_by_label(focused).focus();
@@ -271,10 +274,10 @@ fn focused_tabs_survive_resizing(failures: &mut Vec<String>) {
     }
 }
 
-fn server_model_choices_fit(failures: &mut Vec<String>) {
+fn server_model_choices_fit(mode: Mode, failures: &mut Vec<String>) {
     for lang in ["en", "tr", "de"] {
         for (name, size, zoom) in [("small", egui::vec2(760.0, 520.0), 2.0), ("desktop", egui::vec2(1440.0, 900.0), 1.0)] {
-            let mut h = harness(size, zoom, lang);
+            let mut h = harness(mode, size, zoom, lang);
             h.state_mut().state.settings_tab = SettingsTab::Ai;
             h.run_steps(4);
             let original = modal(&h);
@@ -318,10 +321,10 @@ fn server_model_choices_fit(failures: &mut Vec<String>) {
     }
 }
 
-fn translated_key_rows_fit(failures: &mut Vec<String>) {
+fn translated_key_rows_fit(mode: Mode, failures: &mut Vec<String>) {
     for lang in ["en", "tr", "de"] {
         for width in [360.0, 399.0, 400.0, 410.0, 430.0, 500.0] {
-            let app = demo::app(demo::engine(Mode::Beginner, true));
+            let app = demo::app(demo::engine(mode, true));
             i18n::set_language(lang);
             let mut first = true;
             let mut h = Harness::builder().with_size(egui::vec2(width + 16.0, 500.0)).build_ui_state(
@@ -331,7 +334,7 @@ fn translated_key_rows_fit(failures: &mut Vec<String>) {
                         first = false;
                         return;
                     }
-                    theme::apply(ui.ctx(), app.theme_kind(), true);
+                    theme::apply(ui.ctx(), app.theme_kind());
                     ui.set_width(width);
                     let bounds = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, 480.0));
                     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("key-row-bounds"), bounds));
@@ -358,8 +361,8 @@ fn translated_key_rows_fit(failures: &mut Vec<String>) {
     }
 }
 
-fn repeated_errors_return_into_view(failures: &mut Vec<String>) {
-    let mut h = harness(egui::vec2(760.0, 520.0), 2.0, "en");
+fn repeated_errors_return_into_view(mode: Mode, failures: &mut Vec<String>) {
+    let mut h = harness(mode, egui::vec2(760.0, 520.0), 2.0, "en");
     let error = "Couldn't save your settings. A deliberately long save error. ".repeat(10);
     h.state_mut().toast(error.clone(), true);
     h.run_steps(4);
@@ -385,25 +388,62 @@ fn repeated_errors_return_into_view(failures: &mut Vec<String>) {
     assert_eq!(h.get_by_label(&error).rect().top(), scrolled, "scrolling after a repeated failure stays usable");
 }
 
-fn settings_errors_have_one_visible_copy(failures: &mut Vec<String>) {
+fn settings_errors_have_one_visible_copy(mode: Mode, failures: &mut Vec<String>) {
     let error = "Couldn't save your settings. This error belongs inside Settings.".repeat(5);
-    let shown = error.clone();
     let mut h = Harness::builder().with_size(egui::vec2(760.0, 520.0)).with_max_steps(64).build_eframe(move |cc| {
         CraftApp::setup_context(&cc.egui_ctx);
-        let mut app = demo::app(demo::engine(Mode::Beginner, true));
+        let mut app = demo::app(demo::engine(mode, true));
         app.settings.projects_dir = Some("/samples/projects".into());
         app.state.settings_open = true;
-        app.toast(shown.clone(), true);
         app
     });
     h.ctx.set_zoom_factor(2.0);
     h.run_steps(4);
     assert_eq!(h.ctx.content_rect().size(), egui::vec2(380.0, 260.0));
+    assert!(h.state().state.toasts.is_empty());
+    // Exercise delivery after Settings is already on screen, through the same entry point
+    // used by failed background jobs. The full app must paint only the bounded page copy.
+    let short = "Couldn't save your settings. Destination is read-only.";
+    h.state_mut().toast(short, true);
+    h.run_steps(4);
+    assert_eq!(h.query_all_by_label(short).count(), 1);
+    assert!(modal(&h).contains_rect(h.get_by_label(short).rect()));
+    h.get_by_label("Dismiss").scroll_to_me();
+    h.run_steps(4);
+    assert!(modal(&h).contains_rect(h.get_by_label("Dismiss").rect()));
+    h.get_by_label("Dismiss").click();
+    h.run_steps(4);
+    assert!(h.state().state.toasts.is_empty(), "in-page dismissal removes the original error");
+    assert!(h.query_by_label(short).is_none());
+
+    h.state_mut().toast(error.clone(), true);
+    h.run_steps(4);
+    assert_eq!(h.state().state.toasts, vec![(error.clone(), true)], "delivery preserves the complete original message");
+    let dialog = modal(&h);
+    let close = h.query_all_by_label("Close").map(|node| node.rect()).find(|rect| dialog.contains_rect(*rect)).expect("Settings Close");
+    let header_bottom = close.bottom();
+    screenshot(&mut h, "review-full-app-error");
+    let mut painted = 0;
+    for shape in &h.output().shapes {
+        if let egui::Shape::Text(text) = &shape.shape
+            && text.galley.text() == error
+        {
+            painted += 1;
+            // A vertical ScrollArea clips vertically; its horizontal clip is inherited.
+            // Check the actual visible ink, rather than requiring egui to narrow both axes.
+            assert!(shape.clip_rect.bottom() <= dialog.bottom(), "the page clips long errors above the modal edge");
+            assert!(shape.clip_rect.top() > header_bottom, "the error never paints over the heading or Close");
+            let visible = text.galley.rect.translate(text.pos.to_vec2()).intersect(shape.clip_rect);
+            assert!(visible.is_positive(), "an error generated while Settings is open remains visible");
+            assert!(dialog.contains_rect(visible), "all visible error text stays inside Settings");
+        }
+    }
+    assert_eq!(painted, 1, "no duplicate overlay paints over Settings controls");
+    assert!(h.ctx.content_rect().contains_rect(close));
     let copies = h.query_all_by_label(&error).count();
     if copies != 1 {
         failures.push(format!("review/duplicate-error: the full app renders {copies} copies while Settings is open"));
     }
-    screenshot(&mut h, "review-full-app-error");
     h.state_mut().toast("A confirmation", false);
     h.run_steps(4);
     assert_eq!(h.query_all_by_label("A confirmation").count(), 1, "confirmation overlays still render");
@@ -416,10 +456,17 @@ fn settings_errors_have_one_visible_copy(failures: &mut Vec<String>) {
     h.get_by_label("Dismiss").click();
     h.run_steps(4);
     assert!(h.state().state.toasts.is_empty(), "normal overlay dismissal still works");
+    let outside = "An operation failed outside Settings.";
+    h.state_mut().toast(outside, true);
+    h.run_steps(4);
+    assert_eq!(h.query_all_by_label(outside).count(), 1);
+    h.get_by_label("Dismiss").click();
+    h.run_steps(4);
+    assert!(h.state().state.toasts.is_empty());
 }
 
-fn longer_content_and_resize() {
-    let mut h = harness(egui::vec2(760.0, 520.0), 2.0, "en");
+fn longer_content_and_resize(mode: Mode) {
+    let mut h = harness(mode, egui::vec2(760.0, 520.0), 2.0, "en");
     h.state_mut().settings.plugins = serde_json::from_value(serde_json::json!({
         "mcp": [{"id": "docs", "name": "Documentation tools with a deliberately long display name", "command": "/samples/tools/documentation-helper-with-a-long-name"}],
         "wasm": [{"id": "sample", "name": "Sample component with another long display name", "path": "/samples/plugins/a-long-component-name.wasm"}]
@@ -472,8 +519,8 @@ fn longer_content_and_resize() {
     assert!(modal(&h).contains_rect(h.get_by_label("About").rect()), "selected tab stays in view after resizing");
 }
 
-fn navigation_and_editing() {
-    let mut h = harness(egui::vec2(760.0, 520.0), 2.0, "en");
+fn navigation_and_editing(mode: Mode) {
+    let mut h = harness(mode, egui::vec2(760.0, 520.0), 2.0, "en");
     let close = h.get_by_label("Close").rect();
     // Scroll the rail to its last tab, then back through every tab by real pointer clicks.
     h.get_by_label("About").scroll_to_me();

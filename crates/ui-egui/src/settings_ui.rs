@@ -10,6 +10,9 @@ use craft_anything_engine::Mode;
 use egui::{RichText, Ui, Vec2};
 use std::path::PathBuf;
 
+// TextEdit width includes the compact frame: 8 points per side plus its border.
+const FRAME: f32 = 18.0;
+
 /// Draws the Settings modal and the content for its selected tab.
 pub fn show(app: &mut CraftApp, ctx: &egui::Context) {
     if !app.state.settings_open {
@@ -1030,7 +1033,7 @@ fn ai(app: &mut CraftApp, ui: &mut Ui) {
                         egui::TextEdit::singleline(key)
                             .password(true)
                             .hint_text(tr("API key (stored in your system keychain)"))
-                            .desired_width((ui.available_width() - 18.0).clamp(0.0, 260.0))
+                            .desired_width((ui.available_width() - FRAME).clamp(0.0, 260.0))
                             .frame(widgets::text_field_frame_compact(&Tokens::get(ui.ctx()))),
                     );
                     let k = key.trim().to_string();
@@ -1057,8 +1060,6 @@ pub(crate) fn server_form(app: &mut CraftApp, ui: &mut Ui) {
     ui.label(RichText::new(tr("Ollama or LM Studio on another computer, or any service that speaks the OpenAI API.")).color(t.text_faint).size(theme::CAPTION));
     ui.add_space(theme::space::XS);
     let form = &mut app.server_form;
-    // `width` is the text's; the compact frame adds 8 points a side and its border.
-    const FRAME: f32 = 18.0;
     let field_width = (ui.available_width() - FRAME).max(0.0);
     let field = |ui: &mut Ui, text: &mut String, hint: &str, width: f32, name: &str, secret: bool| {
         let r = ui.add(

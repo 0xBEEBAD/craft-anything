@@ -603,7 +603,8 @@ outside a 380×260 logical viewport. Removing those minima alone still let AI fi
 dropdowns widen it; a wrapping row does not always constrain a control that measures a child UI.
 Budget the frame and actual remaining height, scroll navigation independently, and stack control
 groups when narrow. Test the real modal bounds on every tab, then inspect rendered screenshots;
-also check normal desktop proportions, since a separator can fill an unconstrained body height.
+also check normal desktop proportions. Render the whole app to catch duplicate error overlays;
+a new save-error occurrence must return into view without resetting ordinary scrolling.
 
 **A source inventory limit came after expansion.** Taking five thousand names after collecting
 every source path copied a large `sourceRoot` into every entry first. Count retained entries and
@@ -1350,20 +1351,7 @@ then a fixed number of frames left the next action outside the settled layout. W
 background operation to finish and run immediate repaints after scrolling before clicking;
 otherwise a missed click looks like a backend mutation that never completed.
 
-**Error text is not an occurrence identity.** Reusing a Settings scroll id derived only from
-the message hid an identical new save failure at the previous scroll offset. Track error events
-separately from their text, keeping the id stable between events. Render the whole app in the
-regression too: an isolated dialog missed the duplicate app-level error overlay. Exercise populated
-dropdowns with long values and their open menus; a truncated selected value alone does not bound
-custom popup rows. Measure translated controls with their actual frame semantics: TextEdit already
-includes its frame in its desired width.
-
-**Responsive parents changed transient Settings identities.** A `make_persistent_id` is still
-relative to its UI: moving a page between a column and a row lost a backend draft and its pending
-job marker. Namespace backend drafts and job ids independently of layout and error-scroll ids.
-Keeping draft text is not enough: give the page a stable UI identity, and give interactions
-explicit ids where cursor/focus must survive parent or scroll-id changes. Continue typing without
-refocusing and activate every tab after crossing the orientation breakpoint in both directions.
-On resize, consider keyboard focus separately from selection; egui keeps only the last scroll
-request, so combine the two rectangles when both fit and keep focus visible otherwise. Verify
-both tab orders and that ordinary frames still allow manual scrolling.
+**Responsive Settings lost transient state when its parents changed.** Backend drafts, pending
+jobs, focus and cursors need layout-independent identities. Test continued typing without
+refocusing and tab activation across both rail orientations. On resize, egui keeps only the last
+scroll request: combine selection and focus when both fit, otherwise keep focus visible.
