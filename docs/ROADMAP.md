@@ -2160,6 +2160,7 @@ Gaps found while using the app for real projects.
       addresses, sizes and alt text, and the builder uses placeholders for photos and logos
       unless the person confirms they own them; fetching or publishing each one is a separate
       yes
+      — claimed: rmsff, branch feature/r2.9-carry-over
 - [x] A Rust build starts on a computer without Cargo and spends a whole builder turn before
       its build check says cargo is missing (#1837): a new build whose stack names a program
       (`program` in stacks.toml) stops before any turn when it isn't found, saying how to get
