@@ -212,7 +212,15 @@ fn note_with_just_asked(text: String, ws: &Workspace, clean_room: bool, skip: &[
 /// covers, so it's only logged.
 fn resume_ghidra<'a>(ws: &Workspace, notes: impl IntoIterator<Item = &'a Note>) {
     let Some(asked) = notes.into_iter().filter(|n| !n.text.trim().is_empty()).map(|n| n.added).max() else { return };
-    if let Err(e) = craft_anything_engine::tools::deep::resume_for(&ws.root, asked) {
+    let_ghidra_run_again(&ws.root, asked);
+}
+
+/// A request made at `asked` (a message or a note): Ghidra may be used again for `project` if the
+/// person stopped it before then (#948). Neither kind of request fails when that can't be done (the
+/// stop's lock is busy, a file can't be removed): Ghidra stays off, the built-in engine covers it,
+/// and it's logged.
+fn let_ghidra_run_again(project: &std::path::Path, asked: std::time::SystemTime) {
+    if let Err(e) = craft_anything_engine::tools::deep::resume_for(project, asked) {
         log::warn!("couldn't let Ghidra be used again for this project: {e}");
     }
 }
@@ -844,8 +852,7 @@ impl Worker {
             progress.reset();
             progress.save(&ws.root)?;
             // Ghidra, if the person stopped it for this project, may be used again (#948).
-            craft_anything_engine::tools::deep::resume_for(&ws.root, opts.asked)
-                .map_err(|e| ToolError::new(ErrorCode::FileError, format!("Couldn't let Ghidra be used again for this project: {e}")))?;
+            let_ghidra_run_again(&ws.root, opts.asked);
         }
         // Fail before any work when the agent's tools are missing or it can't sign in.
         let remote_host = entry.config.ssh_host.as_deref().map(str::trim).filter(|h| !h.is_empty());

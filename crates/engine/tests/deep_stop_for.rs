@@ -111,7 +111,7 @@ fn a_decompile_after_stop_does_not_start_the_analysis_again() {
 }
 
 /// #1903 review: a request made before the stop leaves Ghidra off, one made after it lets it run,
-/// and nothing is left in the project but the marker (and its lock file).
+/// and once it runs again nothing of the stop is left in the project.
 #[test]
 fn a_request_from_before_the_stop_keeps_it() {
     let d = tempfile::Builder::new().prefix("ca").tempdir().unwrap();
@@ -126,7 +126,10 @@ fn a_request_from_before_the_stop_keeps_it() {
     assert!(!deep::stopped(&root), "a later request lets Ghidra run");
     deep::resume_for(&root, std::time::SystemTime::now()).unwrap();
     let names: Vec<_> = std::fs::read_dir(&root).unwrap().map(|e| e.unwrap().file_name()).collect();
-    assert!(!names.iter().any(|n| n.to_string_lossy().starts_with(deep::STOPPED)), "{names:?}");
+    assert!(!names.iter().any(|n| n.to_string_lossy().starts_with("ghidra-stop")), "the stop and its lock file are gone: {names:?}");
+    // Stopped again after that: the lock file comes back with the stop.
+    deep::stop_for(&root).unwrap();
+    assert!(deep::stopped(&root) && root.join(deep::STOP_LOCK).is_file());
 }
 
 /// #1903 review: while older requests judge the stop, it never disappears for readers, and a

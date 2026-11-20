@@ -4880,3 +4880,27 @@ fn a_new_build_stops_before_any_turn_when_its_stacks_program_is_missing() {
         assert_eq!(stacks::missing_program(&s.name, |_| false).map(|(p, from)| (p, !from.is_empty())), Some(("cargo", true)), "{}", s.name);
     }
 }
+
+/// #1903 review: a request (a message or a note) never fails because the stop's lock is busy:
+/// Ghidra stays off, and the request goes on.
+#[test]
+fn a_busy_stop_lock_never_fails_a_request() {
+    let d = tempfile::Builder::new().prefix("ca").tempdir().unwrap();
+    let ws = Workspace::create(d.path(), "Game", "a game", TargetRef::None).unwrap();
+    craft_anything_engine::tools::deep::stop_for(&ws.root).unwrap();
+    let lock = std::fs::OpenOptions::new().read(true).write(true).open(ws.root.join(craft_anything_engine::tools::deep::STOP_LOCK)).unwrap();
+    lock.lock().unwrap();
+    super::let_ghidra_run_again(&ws.root, std::time::SystemTime::now());
+    assert!(craft_anything_engine::tools::deep::stopped(&ws.root), "couldn't take the lock, so it stays off");
+    lock.unlock().unwrap();
+    super::let_ghidra_run_again(&ws.root, std::time::SystemTime::now());
+    assert!(!craft_anything_engine::tools::deep::stopped(&ws.root));
+}
+
+/// #1903 review: the stop and its lock are the project's own files, so a builder working in the
+/// project folder can't remove the stop.
+#[test]
+fn the_stop_files_are_the_projects_own() {
+    use craft_anything_engine::workspace::OWN_NAMES;
+    assert!(OWN_NAMES.contains(&craft_anything_engine::tools::deep::STOPPED) && OWN_NAMES.contains(&craft_anything_engine::tools::deep::STOP_LOCK));
+}
