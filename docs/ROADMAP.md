@@ -1924,6 +1924,7 @@ Gaps found while using the app for real projects.
       request comes through the CLI, which is signed without entitlements
 - [ ] The pin and smoke tests added with #2180 read the real Cargo home and `CARGO_TARGET_DIR`
       through the process environment; give them a given environment, as the unit tests have
+      — claimed: rmsff, branch test/r2.9-pin-smoke-given-env
 - [x] "Work on my project" on New project, beside "Make my own version" and "Just look inside":
       pick the folder of a project you already have, say what to change, and its files are edited
       in place, with nothing asked; the project takes the folder's name, an empty folder is
