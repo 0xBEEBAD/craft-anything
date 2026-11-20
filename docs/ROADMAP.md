@@ -2144,6 +2144,7 @@ Gaps found while using the app for real projects.
       — claimed: mansur-akhmadi, branch feature/r2.9-make-site-sign-in
 - [ ] Make doesn't say whether a sign-in is already saved for the typed site, nor offer to forget
       it (`web_site_sign_out`); an address found only in the request has no sign-in button
+      — claimed: rmsff, branch feature/r2.9-signin-known
 - [ ] Study with the person's own already-running browser through its debugging endpoint, as an
       alternative to a saved sign-in
 - [ ] Sign in once with `web_site_sign_in` on a real site behind a login (and with the Ubuntu
