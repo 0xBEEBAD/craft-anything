@@ -1540,7 +1540,7 @@ Owner: maintainers · Status: in progress
       the opt-in engine test records `alpha` and `beta` in order and reports a debugger refusal
       for a non-executable input. Verified with Apple LLDB 2100.0.16.4 on arm64 macOS 27.0.1
       — PR #1844; claimed: rudycelekli, branch test/r2.4-verify-lldb-call-observation
-- [ ] Window capture tried on macOS and Linux (only Windows so far); games behind a launcher
+- [ ] Window capture tried on macOS and Linux (only Windows so far); games behind a launcher — claimed: rmsff, branch feature/r2.4-window-capture-macos-linux
 - [ ] Short scripted input sessions (enigo) to record screens of the original
 - [x] A macOS app bundle picked as an app target (`TipCalc.app`) is studied as a plain folder: the
       study finds no program in it ("Couldn't find the program to decompile"), so Deep mode skips
