@@ -2599,11 +2599,10 @@ mod backend_snapshot_tests {
     #[test]
     fn a_refreshed_context_respects_loaded_model_choices() {
         use craft_anything_ai::config::CliContext::{Long, Standard};
-        for choices in [None, Some(vec![Long]), Some(vec![Standard]), Some(Vec::new())] {
+        for (choices, expected) in [(None, Some(Long)), (Some(vec![Long]), Some(Long)), (Some(vec![Standard]), None), (Some(Vec::new()), None)] {
             let mut app = configured_app();
             app.hub.set_model_options(&options(Long)).unwrap();
             let draft = context_choices(choices);
-            let expected = draft.context;
             app.model_tuning.insert("Copilot".into(), draft);
             app.handle_done(jobs::Finished { job: 0, result: Ok(backends(&app.hub)) });
             assert_eq!(app.model_tuning["Copilot"].params().context, expected);
@@ -2614,10 +2613,9 @@ mod backend_snapshot_tests {
     #[test]
     fn a_settled_context_respects_loaded_model_choices() {
         use craft_anything_ai::config::CliContext::{Long, Standard};
-        for choices in [None, Some(vec![Long]), Some(vec![Standard]), Some(Vec::new())] {
+        for (choices, expected) in [(None, Some(Long)), (Some(vec![Long]), Some(Long)), (Some(vec![Standard]), None), (Some(Vec::new()), None)] {
             let mut app = configured_app();
             let mut draft = context_choices(choices);
-            let expected = draft.context;
             draft.context = None;
             app.model_tuning.insert("Copilot".into(), draft);
             app.set_model_options(craft_anything_ai::model_options::SetModelOptions { backend: "Copilot".into(), expected_cli_model: None, context: None });
