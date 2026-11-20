@@ -1922,9 +1922,11 @@ Gaps found while using the app for real projects.
       (#1939, #2121). Check on a signed, notarised build that macOS shows its Automation prompt
       and lists the app under Privacy → Automation, and whether the prompt appears when the
       request comes through the CLI, which is signed without entitlements
-- [ ] The pin and smoke tests added with #2180 read the real Cargo home and `CARGO_TARGET_DIR`
+- [x] The pin and smoke tests added with #2180 read the real Cargo home and `CARGO_TARGET_DIR`
       through the process environment; give them a given environment, as the unit tests have
-      — claimed: rmsff, branch test/r2.9-pin-smoke-given-env
+      (`Session::cargo_env`, empty in `testing::session()` and the demo app; a Live pin and the
+      Project screen look where it says)
+      — in PR #2214
 - [x] "Work on my project" on New project, beside "Make my own version" and "Just look inside":
       pick the folder of a project you already have, say what to change, and its files are edited
       in place, with nothing asked; the project takes the folder's name, an empty folder is
