@@ -255,6 +255,7 @@ only when it's green and a maintainer has fully reviewed it, code as well as wor
       UI thread and changes the list without a new number, so a refresh read just before it can
       still put the old choice back; and the results of a model change and of saved model options
       aren't filtered at all. Give each the same number, with a test of the order
+      — claimed: Afloat16, branch bugfix/r5.2-ordered-model-snapshots
 - [x] `which::tests::usual_windows_dirs_come_after_path` (platform) failed on Windows with 10
       found, 9 expected ("nothing twice"): #748's second Antigravity folder, counted since #770
 - [x] `capture::console_tests` (platform) timed out now and then with the whole platform suite
