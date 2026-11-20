@@ -34,6 +34,13 @@ struct DeepSlot {
     provider: Result<Arc<dyn DeepDecompiler>, String>,
 }
 
+#[cfg(test)]
+struct TestProviderStart {
+    result: Result<Arc<dyn DeepDecompiler>, Option<String>>,
+    delay: Duration,
+    calls: AtomicUsize,
+}
+
 /// How long Ghidra's one-time analysis of a target may take by default: a big game can take hours,
 /// and it's saved, so later sessions open it in moments.
 const ANALYSIS_LIMIT_SECS: u64 = 8 * 3600;
@@ -55,6 +62,16 @@ pub(super) fn provider_for_active(ctx: &mut Ctx<'_>) -> Result<Arc<dyn DeepDecom
         && let Some(slot) = t.ext.get::<DeepSlot>()
     {
         return slot.provider.clone().map_err(Some);
+    }
+
+    // A target-local startup fixture leaves the real slot reuse and bridge invalidation in
+    // place. An unavailable installation is not remembered here, matching config's fallback.
+    #[cfg(test)]
+    if let Some(start) = ctx.session.active().ok().and_then(|t| t.ext.get::<TestProviderStart>()) {
+        start.calls.fetch_add(1, Ordering::SeqCst);
+        std::thread::sleep(start.delay);
+        let provider = start.result.clone()?;
+        return remember(ctx, Ok(provider));
     }
 
     // The target's bytes and identity.
@@ -593,6 +610,8 @@ mod tests {
         NoText,
         BlankText,
         FailFirst,
+        Disconnected,
+        InvalidProtocol,
         CancelSecond,
         StopSecond(crate::tool::CancelToken),
     }
@@ -627,6 +646,8 @@ mod tests {
                 ExportReply::FailFirst if call == 1 => {
                     return Err(ghidra::GhidraError::Bridge { code: "not_found".into(), message: "fixture has no answer here".into() });
                 }
+                ExportReply::Disconnected => return Err(ghidra::GhidraError::Connection("fixture bridge closed".into())),
+                ExportReply::InvalidProtocol => return Err(ghidra::GhidraError::Protocol("fixture bridge sent invalid data".into())),
                 ExportReply::CancelSecond if call == 2 => return Err(ghidra::GhidraError::Cancelled),
                 ExportReply::StopSecond(token) if call == 2 => token.cancel(),
                 _ => {}
@@ -767,6 +788,73 @@ mod tests {
         assert_eq!(v["result"]["functions_by_engine"]["ghidra"], total - 1);
         assert_eq!(v["result"]["deep_fallbacks"], 1);
         assert_eq!(v["environment"]["engine"], "mixed");
+    }
+
+    #[test]
+    fn source_folder_rechecks_the_deadline_after_a_failed_bridge_restarts() {
+        let (elf, _) = tk::elf64(tk::ElfArch::X86_64, true);
+        for failure in [ExportReply::Disconnected, ExportReply::InvalidProtocol] {
+            let e = engine_with("prog", &elf);
+            let failed = ExportProvider::new(failure);
+            with_deep(&e, failed.clone());
+            let replacement = ExportProvider::new(ExportReply::Code);
+            let start = Arc::new(TestProviderStart { result: Ok(replacement.clone()), delay: Duration::from_millis(1100), calls: AtomicUsize::new(0) });
+            e.session().active_mut().unwrap().ext.insert(start.clone());
+            let tmp = tempfile::tempdir().unwrap();
+            let folder = tmp.path().join("out");
+
+            let v = call(&e, "native_source_folder_write", json!({"folder": folder, "max_seconds": 1}));
+
+            assert_eq!(failed.calls.load(Ordering::SeqCst), 1, "a real bridge error invalidates the first provider");
+            assert_eq!(start.calls.load(Ordering::SeqCst), 1, "the next function starts its replacement");
+            assert_eq!(replacement.calls.load(Ordering::SeqCst), 0, "startup spent the budget, so no replacement decompile may start");
+            assert_eq!(v["result"]["written_now"], 1);
+            assert_eq!(v["result"]["functions_done"], 1);
+            assert_eq!(v["result"]["deep_fallbacks"], 1);
+            assert_eq!(v["result"]["stopped_because"], "time_limit");
+            assert_eq!(v["result"]["finished"], false);
+            assert!(v["result"]["next_function"].is_string());
+            let state = export_state(&folder);
+            let functions = state["functions"].as_object().unwrap();
+            assert_eq!(functions.len(), 1, "the unstarted function gets no file or completed record");
+            let first = folder.join(functions.values().next().unwrap()["file"].as_str().unwrap());
+            let before = std::fs::read(&first).unwrap();
+            let modified = std::fs::metadata(&first).unwrap().modified().unwrap();
+
+            let resumed = call(&e, "native_source_folder_write", json!({"folder": folder}));
+
+            assert_eq!(resumed["result"]["finished"], true);
+            assert_eq!(resumed["result"]["already_done"], 1);
+            assert_eq!(start.calls.load(Ordering::SeqCst), 1, "the ready replacement is reused");
+            assert_eq!(replacement.calls.load(Ordering::SeqCst) as u64, resumed["result"]["functions_total"].as_u64().unwrap() - 1);
+            assert_eq!(std::fs::read(&first).unwrap(), before);
+            assert_eq!(std::fs::metadata(&first).unwrap().modified().unwrap(), modified);
+        }
+    }
+
+    #[test]
+    fn source_folder_checks_an_unavailable_installation_once_per_call() {
+        let (elf, _) = tk::elf64(tk::ElfArch::X86_64, true);
+        let e = engine_with("prog", &elf);
+        let start = Arc::new(TestProviderStart { result: Err(Some(NOT_INSTALLED.into())), delay: Duration::ZERO, calls: AtomicUsize::new(0) });
+        {
+            let mut session = e.session();
+            session.settings.deep_mode = true;
+            session.active_mut().unwrap().ext.insert(start.clone());
+        }
+        let tmp = tempfile::tempdir().unwrap();
+
+        let v = call(&e, "native_source_folder_write", json!({"folder": tmp.path().join("out")}));
+
+        let total = v["result"]["functions_total"].as_u64().unwrap();
+        assert!(total > 1, "the cache must cover more than one function");
+        assert_eq!(start.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(v["result"]["functions_by_engine"]["builtin"], total);
+        assert_eq!(v["result"]["deep_fallbacks"], total);
+        assert_eq!(v["result"]["finished"], true);
+        let next = call(&e, "native_source_folder_write", json!({"folder": tmp.path().join("another-export")}));
+        assert_eq!(next["result"]["finished"], true);
+        assert_eq!(start.calls.load(Ordering::SeqCst), 2, "another export gets its own availability check");
     }
 
     #[test]

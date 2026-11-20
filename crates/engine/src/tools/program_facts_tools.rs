@@ -1144,7 +1144,11 @@ fn native_source_folder_write(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOu
         }
         // Start Ghidra only for work this call will do. Remember an unavailable installation
         // for this export call, avoiding a filesystem search for every function. A ready
-        // provider is in DeepSlot; the ordinary helper keeps its bridge-recovery behavior.
+        // provider is in DeepSlot, which a bridge failure can remove. Confirm it again so a
+        // replacement starts before the post-startup budget check, not inside pseudo_code.
+        if matches!(deep_available, Some(Ok(()))) {
+            deep_available = None;
+        }
         let availability = deep_available.get_or_insert_with(|| super::deep::provider_for_active(ctx).map(|_| ()));
         if let Err(e) = ctx.cancel.check() {
             save_export_state(&folder, &state)?;
