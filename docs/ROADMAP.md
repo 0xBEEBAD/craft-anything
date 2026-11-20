@@ -2380,6 +2380,7 @@ Owner: open · Status: in progress
       — claimed: Plastic-time, branch bugfix/r3.11-pseudo-write-footprints
 - [ ] `native_source_folder_write` uses the built-in decompiler only: use Ghidra in Deep mode when
       it's there
+      — claimed: Afloat16, branch feature/r3.11-deep-source-folder
 - [x] Keep source registers alive when an AArch64 arithmetic result is discarded into the zero register.
       — claimed: Afloat16, branch bugfix/r3.11-a64-discarded-results-20261111
 - [x] Lift AArch64 `cmn` (`adds xzr/wzr, …`) branch conditions as `(a + b) <op> 0` and omit
