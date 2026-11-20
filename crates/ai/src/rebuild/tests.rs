@@ -1927,6 +1927,37 @@ mod picking_up_a_build {
         ws
     }
 
+    #[test]
+    fn a_direct_start_recovers_the_queued_request_without_duplicating_waiting_notes() {
+        let b = bench();
+        let ws = worked_on(&b);
+        let picture = ws.root.join("attachments/search.png");
+        let words = "Add a search box and keep the current layout";
+        // The UI already carries these old waiting notes in the queued message. Recovery must
+        // not feed them a second time from inbox/notes, or send the old brief instead.
+        notes::hand_over(
+            &notes::notes_dir(&ws.inbox_dir()),
+            7,
+            "Add a search box",
+            Some(&notes::Left { text: "Add a search box".into(), shown: "Add search".into(), pictures: vec![picture.clone()] }),
+        )
+        .unwrap();
+        queued_request::save(
+            &ws,
+            &RunOptions { message: Some(words.into()), shown: Some("Add search".into()), shown_pictures: vec![picture.clone()], ..Default::default() },
+        )
+        .unwrap();
+        let (ok, feed) = try_it(&b, &ws);
+        assert!(ok);
+        assert!(!studied(&feed), "the restored follow-up keeps the finished study");
+        let prompts = std::fs::read_to_string(&b.prompts).unwrap();
+        assert_eq!(prompts.matches("Add a search box").count(), 1, "{prompts}");
+        assert!(prompts.contains(words), "{prompts}");
+        assert!(feed.iter().any(|item| matches!(item, feed::FeedItem::User(user) if user.text() == "Add search" && user.pictures() == [picture.clone()])));
+        assert!(queued_request::restore(&ws, &mut RunOptions::default()).unwrap().is_none(), "a started request is no longer queued");
+        assert!(notes::take_left(&notes::notes_dir(&ws.inbox_dir()), true).is_empty());
+    }
+
     /// #91: with the helper missing, the build stops before studying or asking the agent, and
     /// says why.
     #[test]

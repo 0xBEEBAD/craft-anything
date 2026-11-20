@@ -26,7 +26,7 @@ pub enum Started {
 pub enum Stopped {
     /// Asked to stop; its `Finished` event follows.
     Stopping,
-    /// Taken out of the queue before it started.
+    /// Paused before it started. Its request stays for the next manual start.
     Unqueued,
     Nothing,
 }
@@ -93,16 +93,21 @@ impl RunSet {
     /// Start a run on `ws`, or queue it when `limit` are already working or it has to wait to work
     /// alone. Nothing overtakes the queue, so one waiting to be alone gets its turn. A project that
     /// is working or queued is refused.
-    pub fn start(&mut self, hub: &AiHub, ws: Workspace, opts: RunOptions) -> Result<Started, ToolError> {
+    pub fn start(&mut self, hub: &AiHub, mut ws: Workspace, mut opts: RunOptions) -> Result<Started, ToolError> {
         if self.is_running(&ws.root) || self.position(&ws.root).is_some() {
             return Err(
                 ToolError::new(ErrorCode::BadInput, "This project is already building.").with_remediation("Add to it while it works, or stop it first.")
             );
         }
+        // Queueing saves its waiting status too. Keep the last run's final session and builder
+        // choices, rather than writing them back from the caller's older project snapshot.
+        ws.reload()?;
+        let saved = queued_request::restore(&ws, &mut opts)?;
         let alone = must_work_alone(hub, &ws, &opts);
         if self.queue.is_empty() && self.has_room(alone) {
             let root = ws.root.clone();
-            let run = (self.starter)(hub, ws, opts)?;
+            let run = (self.starter)(hub, ws.clone(), opts)?;
+            queued_request::finished(&ws, saved.as_ref());
             self.alone = alone.then(|| root.clone());
             self.runs.insert(root, run);
             return Ok(Started::Running);
@@ -110,6 +115,8 @@ impl RunSet {
         // Fail now, not when its turn comes, when no coding agent is set up.
         let cfg = hub.config();
         builder_backend(&cfg, opts.backend.as_deref().or_else(|| super::project_builder(&cfg, &ws)))?;
+        queued_request::save(&ws, &opts)?;
+        ws.set_status(Status::Stopped, "Waiting for a build slot.")?;
         self.queue.push_back((ws, opts, alone));
         Ok(Started::Queued { position: self.queue.len() })
     }
@@ -134,8 +141,10 @@ impl RunSet {
             }
             let root = ws.root.clone();
             let mut keep = ws.clone();
+            let saved = queued_request::QueuedRequest::from_options(&opts);
             match (self.starter)(hub, ws, opts) {
                 Ok(run) => {
+                    queued_request::finished(&keep, saved.as_ref());
                     self.alone = alone.then(|| root.clone());
                     self.runs.insert(root, run);
                 }
@@ -270,6 +279,152 @@ mod tests {
         s.settings.ai = toml::from_str("[[backends]]\nname = \"Agent\"\nkind = \"agent_cli\"\nmodel = \"claude-code\"\n").unwrap();
         assert!(builder_backend(&crate::AiConfig::from_settings(&s.settings), None).is_ok());
         AiHub::new(Arc::new(Engine::new(s)))
+    }
+
+    type SeenRequest = (Option<String>, Option<String>, Vec<PathBuf>);
+
+    fn remembering_requests(seen: Arc<Mutex<Vec<SeenRequest>>>) -> Starter {
+        let mut start = StandIns::new().starter();
+        Box::new(move |hub, ws, opts| {
+            seen.lock().unwrap().push((opts.message.clone(), opts.shown.clone(), opts.shown_pictures.clone()));
+            start(hub, ws, opts)
+        })
+    }
+
+    #[test]
+    fn a_queued_request_survives_shutdown_and_an_abruptly_lost_queue() {
+        for stopped in [false, true] {
+            let d = tempfile::tempdir().unwrap();
+            let a = Workspace::create(d.path(), "A", "A game", TargetRef::None).unwrap();
+            let b = Workspace::create(d.path(), "B", "A game", TargetRef::None).unwrap();
+            let picture = b.root.join("pictures/reference.png");
+            let opts = RunOptions {
+                message: Some("Keep the exact request\nwith its attachment path".into()),
+                shown: Some("Keep the exact request".into()),
+                shown_pictures: vec![picture.clone()],
+                ..RunOptions::default()
+            };
+            let hub = hub();
+            let mut set = RunSet::new(1).with_starter(StandIns::new().starter());
+            set.start(&hub, a, RunOptions::default()).unwrap();
+            assert_eq!(set.start(&hub, b.clone(), opts).unwrap(), Started::Queued { position: 1 });
+            assert_eq!(Workspace::open(&b.root).unwrap().manifest.status, Status::Stopped, "a reopened project offers Continue");
+            if stopped {
+                set.stop_all();
+            }
+            drop(set);
+
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let mut reopened = RunSet::new(1).with_starter(remembering_requests(seen.clone()));
+            assert_eq!(reopened.start(&hub, Workspace::open(&b.root).unwrap(), RunOptions::default()).unwrap(), Started::Running);
+            assert_eq!(
+                *seen.lock().unwrap(),
+                [(Some("Keep the exact request\nwith its attachment path".into()), Some("Keep the exact request".into()), vec![picture])],
+                "the next run receives the request, its display text and its pictures after the queue is gone"
+            );
+        }
+    }
+
+    #[test]
+    fn a_queued_request_is_not_accepted_when_it_cannot_be_saved() {
+        let d = tempfile::tempdir().unwrap();
+        let a = Workspace::create(d.path(), "A", "A game", TargetRef::None).unwrap();
+        let b = Workspace::create(d.path(), "B", "A game", TargetRef::None).unwrap();
+        std::fs::write(b.inbox_dir(), b"not a folder").unwrap();
+        let hub = hub();
+        let mut set = RunSet::new(1).with_starter(StandIns::new().starter());
+        set.start(&hub, a, RunOptions::default()).unwrap();
+        let result = set.start(&hub, b.clone(), RunOptions { message: Some("Keep this request".into()), ..RunOptions::default() });
+        assert!(result.is_err(), "an accepted request must outlive the in-memory queue");
+        assert_eq!(set.position(&b.root), None, "a failed save must not enqueue the request");
+    }
+
+    #[test]
+    fn a_queued_request_survives_a_failure_to_start() {
+        let d = tempfile::tempdir().unwrap();
+        let a = Workspace::create(d.path(), "A", "A game", TargetRef::None).unwrap();
+        let b = Workspace::create(d.path(), "B", "A game", TargetRef::None).unwrap();
+        let hub = hub();
+        let fake = StandIns::new().failing("B");
+        let mut set = RunSet::new(1).with_starter(fake.starter());
+        set.start(&hub, a.clone(), RunOptions::default()).unwrap();
+        set.start(&hub, b.clone(), RunOptions { message: Some("Retry this request".into()), ..RunOptions::default() }).unwrap();
+        fake.finish(&a.root);
+        assert!(set.poll(&hub).iter().any(|(root, e)| root == &b.root && matches!(e, RunEvent::Finished { ok: false, .. })));
+        drop(set);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let mut reopened = RunSet::new(1).with_starter(remembering_requests(seen.clone()));
+        reopened.start(&hub, b, RunOptions::default()).unwrap();
+        assert_eq!(seen.lock().unwrap()[0].0.as_deref(), Some("Retry this request"));
+    }
+
+    #[test]
+    fn a_successfully_started_request_is_not_replayed() {
+        let d = tempfile::tempdir().unwrap();
+        let a = Workspace::create(d.path(), "A", "A game", TargetRef::None).unwrap();
+        let b = Workspace::create(d.path(), "B", "A game", TargetRef::None).unwrap();
+        let hub = hub();
+        let fake = StandIns::new();
+        let mut start = fake.starter();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let requests = seen.clone();
+        let mut set = RunSet::new(1).with_starter(Box::new(move |hub, ws, opts| {
+            requests.lock().unwrap().push(opts.message.clone());
+            start(hub, ws, opts)
+        }));
+        set.start(&hub, a.clone(), RunOptions::default()).unwrap();
+        set.start(&hub, b.clone(), RunOptions { message: Some("Send once".into()), ..RunOptions::default() }).unwrap();
+        fake.finish(&a.root);
+        set.poll(&hub);
+        assert_eq!(*seen.lock().unwrap(), [None, Some("Send once".into())]);
+        drop(set);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let mut reopened = RunSet::new(1).with_starter(remembering_requests(seen.clone()));
+        reopened.start(&hub, b, RunOptions::default()).unwrap();
+        assert_eq!(seen.lock().unwrap()[0].0, None);
+    }
+
+    #[test]
+    fn queueing_keeps_the_last_runs_saved_session() {
+        let d = tempfile::tempdir().unwrap();
+        let a = Workspace::create(d.path(), "A", "A game", TargetRef::None).unwrap();
+        let b = Workspace::create(d.path(), "B", "A game", TargetRef::None).unwrap();
+        let mut current = Workspace::open(&b.root).unwrap();
+        current.manifest.agent_session = Some("the-last-runs-session".into());
+        current.save().unwrap();
+        current.set_person(|m| m.builder = Some("Agent".into())).unwrap();
+        let hub = hub();
+        let mut set = RunSet::new(1).with_starter(StandIns::new().starter());
+        set.start(&hub, a, RunOptions::default()).unwrap();
+        assert_eq!(
+            set.start(&hub, b.clone(), RunOptions { message: Some("Keep going".into()), ..Default::default() }).unwrap(),
+            Started::Queued { position: 1 }
+        );
+        let saved = Workspace::open(&b.root).unwrap();
+        assert_eq!(saved.manifest.agent_session.as_deref(), Some("the-last-runs-session"));
+        assert_eq!(saved.manifest.builder.as_deref(), Some("Agent"));
+        assert_eq!(saved.manifest.status, Status::Stopped);
+    }
+
+    #[test]
+    fn pausing_a_queued_request_keeps_it_for_manual_continue() {
+        let d = tempfile::tempdir().unwrap();
+        let a = Workspace::create(d.path(), "A", "A game", TargetRef::None).unwrap();
+        let b = Workspace::create(d.path(), "B", "A game", TargetRef::None).unwrap();
+        let hub = hub();
+        let mut set = RunSet::new(1).with_starter(StandIns::new().starter());
+        set.start(&hub, a, RunOptions::default()).unwrap();
+        set.start(&hub, b.clone(), RunOptions { message: Some("Resume my change".into()), ..Default::default() }).unwrap();
+        assert_eq!(set.stop(&b.root), Stopped::Unqueued);
+        assert_eq!(set.position(&b.root), None);
+        // Continuing while the other build still works must keep the restored words when it is
+        // queued a second time, and survive another restart before a slot comes free.
+        assert_eq!(set.start(&hub, b.clone(), RunOptions::default()).unwrap(), Started::Queued { position: 1 });
+        drop(set);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let mut reopened = RunSet::new(1).with_starter(remembering_requests(seen.clone()));
+        reopened.start(&hub, b, RunOptions::default()).unwrap();
+        assert_eq!(seen.lock().unwrap()[0].0.as_deref(), Some("Resume my change"));
     }
 
     #[test]

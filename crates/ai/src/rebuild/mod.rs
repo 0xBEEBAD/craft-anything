@@ -49,6 +49,7 @@ pub mod notes;
 mod output;
 pub mod project;
 pub mod question;
+mod queued_request;
 pub mod runs;
 pub mod self_check;
 pub mod stacks;
@@ -266,11 +267,13 @@ pub struct RebuildRun {
 
 impl RebuildRun {
     /// Start a run on a worker thread. Fails fast (before any work) when no coding agent is set up.
-    pub fn start(hub: &AiHub, ws: Workspace, opts: RunOptions) -> Result<RebuildRun, ToolError> {
+    pub fn start(hub: &AiHub, ws: Workspace, mut opts: RunOptions) -> Result<RebuildRun, ToolError> {
         // The project as it is now. A run that waited in the queue, or one started as the project's
         // last run was ending, holds a copy from before that run's last saves (its session), and
         // everything below, the worker's saves included, works from this copy.
         let mut ws = Workspace::open(&ws.root).unwrap_or(ws);
+        let queued = queued_request::restore(&ws, &mut opts)?;
+        let queued_workspace = ws.clone();
         let cfg = hub.config();
         let entry = builder_backend(&cfg, opts.backend.as_deref().or_else(|| project_builder(&cfg, &ws)))?;
         // The person's choice of mode is a session setting. A run that waited its turn uses the mode
@@ -371,6 +374,7 @@ impl RebuildRun {
                 r2.store(false, Ordering::SeqCst);
             })
             .map_err(|e| ToolError::internal(e.to_string()))?;
+        queued_request::finished(&queued_workspace, queued.as_ref());
         let activity = feed.lock().unwrap_or_else(PoisonError::into_inner).activity();
         let run = RebuildRun { rx, stop, inbox, running, preview, notes, clean_room, feed, root, started: Instant::now(), activity };
         // Waiting again with files of their own: the builder takes them at its next step or after
