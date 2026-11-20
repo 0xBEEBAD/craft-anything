@@ -59,6 +59,12 @@ fn screenshot(h: &mut Harness<'_, CraftApp>, name: &str) {
 
 #[test]
 fn settings_fits_and_remains_usable_in_each_viewport_and_language() {
+    let mut review_failures = Vec::new();
+    for mode in [Mode::Beginner, Mode::Experienced] {
+        focused_about_survives_a_round_trip(mode, &mut review_failures);
+        path_draft_survives_row_layout_changes(mode, &mut review_failures);
+        configured_model_choices_fit(mode, &mut review_failures);
+    }
     for mode in [Mode::Beginner, Mode::Experienced] {
         let mut failures = Vec::new();
         widget_focus_survives_orientation_changes(mode, &mut failures);
@@ -142,6 +148,7 @@ fn settings_fits_and_remains_usable_in_each_viewport_and_language() {
         longer_content_and_resize(mode);
         eprintln!("{mode:?}: 63 viewport/tab/locale cases plus navigation, forms, errors and resize regressions passed");
     }
+    assert!(review_failures.is_empty(), "{} review failures:\n{}", review_failures.len(), review_failures.join("\n"));
 }
 
 fn widget_focus_survives_orientation_changes(mode: Mode, failures: &mut Vec<String>) {
@@ -586,4 +593,126 @@ fn navigation_and_editing(mode: Mode) {
     h.get_by_label("Close").click();
     h.run_steps(3);
     assert!(!h.state().state.settings_open);
+}
+
+fn focused_about_survives_a_round_trip(mode: Mode, failures: &mut Vec<String>) {
+    let mut h = harness(mode, egui::vec2(900.0, 260.0), 1.0, "en");
+    assert_eq!(h.state().state.settings_tab, SettingsTab::General);
+    h.set_size(egui::vec2(380.0, 260.0));
+    h.run_steps(4);
+    h.get_by_label("About").focus();
+    h.run_steps(4);
+    assert!(h.get_by_label("About").is_focused());
+    h.set_size(egui::vec2(900.0, 260.0));
+    h.run_steps(4);
+    assert_eq!(h.ctx.content_rect().size(), egui::vec2(900.0, 260.0));
+    assert_eq!(h.state().state.settings_tab, SettingsTab::General, "focus must not select About");
+    if !h.get_by_label("About").is_focused() || !modal(&h).contains_rect(h.get_by_label("About").rect()) {
+        failures.push(format!("{mode:?}/tab-round-trip: focused About is lost or outside the restored vertical rail"));
+    }
+    screenshot(&mut h, "followup-about-round-trip");
+}
+
+fn path_draft_survives_row_layout_changes(mode: Mode, failures: &mut Vec<String>) {
+    let mut h = harness(mode, egui::vec2(1440.0, 900.0), 1.0, "en");
+    h.state_mut().state.settings_tab = SettingsTab::Engines;
+    h.run_steps(4);
+    h.get_all_by_label("Ghidra folder").last().unwrap().scroll_to_me();
+    h.run_steps(4);
+    h.get_all_by_label("Ghidra folder").last().unwrap().focus();
+    h.run_steps(2);
+    h.get_all_by_label("Ghidra folder").last().unwrap().type_text("/tmp/Ghidra ");
+    h.run_steps(2);
+    h.key_press(egui::Key::Home);
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(2);
+    let focused = h.ctx.memory(|m| m.focused()).unwrap();
+    let mut cursor = egui::TextEdit::load_state(&h.ctx, focused).unwrap().cursor.char_range();
+    let mut expected = "/tmp/Ghidra ".to_string();
+    for (name, size, typed) in [("stacked", egui::vec2(380.0, 260.0), "a"), ("horizontal", egui::vec2(1440.0, 900.0), "b")] {
+        h.set_size(size);
+        h.run_steps(4);
+        let input = h.get_all_by_label("Ghidra folder").last().unwrap();
+        if input.value().as_deref() != Some(expected.as_str()) || !input.is_focused() {
+            failures.push(format!("{mode:?}/path-{name}: lost the untrimmed draft or keyboard focus"));
+        }
+        let retained = h.ctx.memory(|m| m.focused()).and_then(|id| egui::TextEdit::load_state(&h.ctx, id)).and_then(|s| s.cursor.char_range());
+        if retained != cursor {
+            failures.push(format!("{mode:?}/path-{name}: cursor moved during resize"));
+        }
+        // type_text sends text without requesting focus. Insert at the retained interior cursor.
+        input.type_text(typed);
+        h.run_steps(3);
+        let at = cursor.unwrap().primary.index;
+        expected.insert_str(at.into(), typed);
+        if h.get_all_by_label("Ghidra folder").last().unwrap().value().as_deref() != Some(expected.as_str()) {
+            failures.push(format!("{mode:?}/path-{name}: typing did not continue at the interior cursor"));
+        }
+        h.get_all_by_label("Ghidra folder").last().unwrap().scroll_to_me();
+        h.run_steps(4);
+        assert!(modal(&h).contains_rect(h.get_all_by_label("Ghidra folder").last().unwrap().rect()));
+        screenshot(&mut h, &format!("followup-ghidra-{name}"));
+        // Remember the updated cursor for the next orientation transition.
+        cursor = egui::TextEdit::load_state(&h.ctx, focused).unwrap().cursor.char_range();
+    }
+}
+
+fn configured_model_choices_fit(mode: Mode, failures: &mut Vec<String>) {
+    let long = format!("local/{}", "configured-model-name-".repeat(10));
+    let other = format!("local/{}", "another-complete-model-name-".repeat(9));
+    let mut h = harness(mode, egui::vec2(760.0, 520.0), 2.0, "en");
+    h.state()
+        .hub
+        .add_backend(
+            craft_anything_ai::BackendConfig {
+                name: "Box".into(),
+                kind: craft_anything_ai::BackendKind::OpenaiCompatible,
+                model: long.clone(),
+                base_url: Some("http://127.0.0.1:11434/v1".into()),
+                ssh_host: None,
+                enabled: true,
+            },
+            None,
+        )
+        .unwrap();
+    h.state_mut().backends = h.state().hub.backends();
+    h.state_mut().state.settings_tab = SettingsTab::Ai;
+    h.run_steps(4);
+    let initial = modal(&h);
+    h.state_mut().model_picker = Some(("Box".into(), Some(vec![long.clone(), other.clone(), "small-model".into()])));
+    h.run_steps(4);
+    assert_eq!(h.ctx.content_rect().size(), egui::vec2(380.0, 260.0));
+    h.get_by_value(&long).scroll_to_me();
+    h.run_steps(4);
+    if modal(&h) != initial || !h.ctx.content_rect().contains_rect(modal(&h)) || !modal(&h).contains_rect(h.get_by_value(&long).rect()) {
+        failures.push(format!("{mode:?}/configured-model: selected value widens or leaves Settings"));
+    }
+    screenshot(&mut h, "followup-configured-model");
+    // Open by keyboard even on the broken layout, where the node's center is offscreen.
+    h.get_by_value(&long).focus();
+    h.run_steps(2);
+    h.key_press(egui::Key::Space);
+    h.run_steps(4);
+    for model in [&long, &other] {
+        if let Some(choice) = h.query_by_label(model) {
+            if !h.ctx.content_rect().contains_rect(choice.rect()) {
+                failures.push(format!("{mode:?}/configured-menu: full accessible model choice exceeds the viewport"));
+            }
+        } else {
+            failures.push(format!("{mode:?}/configured-menu: missing complete accessible identifier"));
+        }
+    }
+    screenshot(&mut h, "followup-configured-menu");
+    if h.query_by_label(&other).is_some_and(|choice| h.ctx.content_rect().contains_rect(choice.rect())) {
+        h.get_by_label(&other).click();
+        h.run_steps(3);
+        // The choice saves on a worker to the demo's isolated config, with no server request.
+        // Wait for completion rather than assuming a fixed number of frames finishes file I/O.
+        let start = std::time::Instant::now();
+        while !h.state().hub.backends().iter().any(|b| b.name == "Box" && b.model == other) && start.elapsed() < std::time::Duration::from_secs(10) {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(h.state().hub.backends().iter().any(|b| b.name == "Box" && b.model == other), "selection must save the complete identifier");
+        assert!(h.state().model_picker.is_none());
+    }
 }

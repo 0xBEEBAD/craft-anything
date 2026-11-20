@@ -73,7 +73,7 @@ pub fn show(app: &mut CraftApp, ctx: &egui::Context) {
 
 fn tabs(app: &mut CraftApp, ui: &mut Ui, horizontal: bool, height: f32) {
     let t = Tokens::get(ui.ctx());
-    let id = ui.make_persistent_id("shown-settings-tab");
+    let id = egui::Id::new("shown-settings-tab");
     let shown = (app.state.settings_tab, horizontal, ui.ctx().content_rect().size());
     let changed = ui.data_mut(|d| {
         let previous = d.get_temp::<(SettingsTab, bool, Vec2)>(id);
@@ -157,7 +157,7 @@ fn page_content(app: &mut CraftApp, ui: &mut Ui, h: f32) {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
     ui.set_width(w);
-    let content_w = (w - ui.spacing().scroll.allocated_width() - 14.0).max(0.0);
+    let content_w = (w - ui.spacing().scroll.allocated_width() - theme::SETTINGS_CONTENT_INSET).max(0.0);
     // A new save error starts in view, even if the person was editing near the page's end.
     let page_id = egui::Id::new("settings-page").with((app.toast_error_revision, app.state.toasts.iter().rfind(|(_, error)| *error).map(|(text, _)| text)));
     // Fixed bounds across tabs, with the header outside the scrolling page.
@@ -196,6 +196,11 @@ fn controls<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> egui::InnerRespon
 fn row(ui: &mut Ui, title: &str, sub: &str, add: impl FnOnce(&mut Ui)) {
     let t = Tokens::get(ui.ctx());
     let narrow = ui.available_width() < theme::breakpoint::SETTINGS_LABELS;
+    // The narrow branch adds a controls container. Its descendants must keep their draft,
+    // keyboard focus and cursor when moving back to the horizontal row.
+    let add = |ui: &mut Ui| {
+        ui.scope_builder(egui::UiBuilder::new().id(egui::Id::new(("settings-row-controls", title))), add);
+    };
     let labels = |ui: &mut Ui| {
         ui.set_width(if narrow { ui.available_width() } else { 280.0 });
         ui.label(RichText::new(tr(title)).font(theme::medium(theme::BODY)));
@@ -647,13 +652,18 @@ fn ai(app: &mut CraftApp, ui: &mut Ui) {
                                             m.to_string()
                                         }
                                     };
-                                    widgets::dropdown(("model", &b.name)).selected_text(shown(&picked)).show_ui(ui, |ui| {
-                                        for m in models {
-                                            if widgets::menu_item(ui, *m == picked, shown(m)).clicked() && *m != picked {
-                                                chosen_model = Some((b.name.clone(), m.clone()));
+                                    let r = widgets::dropdown(("model", &b.name))
+                                        .width(ui.available_size_before_wrap().x)
+                                        .selected_text(shown(&picked))
+                                        .truncate()
+                                        .show_ui(ui, |ui| {
+                                            for m in models {
+                                                if widgets::menu_item_truncated(ui, *m == picked, shown(m)).on_hover_text(m).clicked() && *m != picked {
+                                                    chosen_model = Some((b.name.clone(), m.clone()));
+                                                }
                                             }
-                                        }
-                                    });
+                                        });
+                                    r.response.on_hover_text(&picked);
                                     if widgets::caption_link(ui, "Cancel").clicked() {
                                         close_picker = true;
                                     }

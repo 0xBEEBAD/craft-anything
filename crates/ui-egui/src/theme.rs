@@ -378,6 +378,9 @@ pub mod breakpoint {
     pub const SETTINGS_LABELS: f32 = 560.0;
 }
 
+/// Extra horizontal room reserved beside the scrolling Settings content.
+pub const SETTINGS_CONTENT_INSET: f32 = 14.0;
+
 /// Icon sizes.
 pub mod icon {
     pub const XS: f32 = 12.0;
