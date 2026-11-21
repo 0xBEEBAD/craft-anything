@@ -1005,7 +1005,11 @@ impl<'a> D<'a> {
     /// `associated type descriptor for Human.ComputeNode.Input`.
     fn associated_type_descriptor(&mut self) -> R<()> {
         let base = self.pop_type()?;
-        let name = self.pop_decl_name()?;
+        match &base {
+            N::Nominal { kind: 'P', .. } => {}
+            _ => return Err("expected a protocol".into()),
+        }
+        let name = self.pop_name()?;
         let n = N::Member { base: Box::new(base), name };
         self.push(N::Global { prefix: "associated type descriptor for".into(), inner: Box::new(n), suffix: String::new() })
     }

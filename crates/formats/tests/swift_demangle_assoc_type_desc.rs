@@ -26,7 +26,9 @@ fn constructed_associated_type_descriptors_decode() {
 /// Malformed operands are rejected.
 #[test]
 fn malformed_associated_type_descriptors_are_invalid() {
-    for symbol in ["_$sPTl", "_$s3FooPTl", "_$s3Foo5ProtoPTl", "_$s3Foo5ProtoP3BarTlX", "_$s3Foo5ProtoP3BarT"] {
+    for symbol in
+        ["_$sPTl", "_$s3FooPTl", "_$s3Foo5ProtoPTl", "_$s3Foo5ProtoP3BarTlX", "_$s3Foo5ProtoP3BarT", "_$s3Bar3Foo5ProtoVTl", "_$s3Bar4_ABCLL3Foo5ProtoPTl"]
+    {
         assert_eq!(demangle(symbol).status, Status::Invalid, "{symbol}");
     }
 }
