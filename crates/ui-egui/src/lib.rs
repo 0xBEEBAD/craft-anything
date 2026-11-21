@@ -589,7 +589,7 @@ pub struct CraftApp {
     /// A website sign-in window open from Make (one at a time; Start waits for it).
     pub signing_in: Option<u64>,
     /// The site Make last asked about (its sign-in key) and whether a sign-in is saved for it:
-    /// read from disk once, not every frame, and read again after any job ends.
+    /// read from disk once, not every frame, and read again after any job or chat tool ends.
     sign_in_known: Option<(String, bool)>,
     /// Tools the UI started that wait for the person's consent, by the id on their card.
     pending_consent: std::collections::HashMap<u64, (String, Value, Route)>,
@@ -1527,7 +1527,11 @@ impl CraftApp {
         for e in events {
             chat::apply_event(&mut self.state.chat, e.clone());
             match e {
-                AgentEvent::ToolFinished { .. } => self.view_dirty = true,
+                // A chat answer's tool may have saved or forgotten a sign-in, and no job ends for it.
+                AgentEvent::ToolFinished { .. } => {
+                    self.view_dirty = true;
+                    self.sign_in_known = None;
+                }
                 AgentEvent::TurnDone { backend, input_tokens, output_tokens, tokens_unknown, cost_usd, cost_is_estimate } => {
                     self.view_dirty = true;
                     self.session_usage.tokens_incomplete |= tokens_unknown;
@@ -1622,7 +1626,7 @@ impl CraftApp {
         if self.signing_in == Some(job) {
             self.signing_in = None;
         }
-        // Any job may have saved or forgotten a sign-in (a button, the palette, a chat answer).
+        // Any job may have saved or forgotten a sign-in (a button, the palette).
         self.sign_in_known = None;
         // The form's own request: a newer Add replaces it, and an older answer is then stale.
         let form_request = self.server_form.connecting.as_ref().is_some_and(|(id, ..)| *id == job);
