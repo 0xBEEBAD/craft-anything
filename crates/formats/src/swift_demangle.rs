@@ -972,6 +972,23 @@ impl<'a> D<'a> {
         self.push(N::Global { prefix: what.into(), inner: Box::new(name), suffix: String::new() })
     }
 
+    /// `Tg` and one digit: a generic specialization of the declaration before the digit, such as
+    /// `generic specialization <Swift.UInt8> of Swift.Array.count.getter : Swift.Int`. The operand is
+    /// an underscore (popped as `FirstMarker`), then the declaration it specializes, then the type it
+    /// is specialized for, in that order. The digit is consumed and not printed.
+    fn generic_specialization(&mut self) -> R<()> {
+        let kind = self.next()?;
+        if !kind.is_ascii_digit() {
+            return Err("expected a generic specialization kind digit".into());
+        }
+        if !matches!(self.pop()?, N::FirstMarker) {
+            return Err("generic specialization without a marker".into());
+        }
+        let arg = self.pop_type()?;
+        let base = self.pop_type()?;
+        self.push(N::Global { prefix: format!("generic specialization <{}> of", render(&arg, 0)), inner: Box::new(base), suffix: String::new() })
+    }
+
     /// `WT`: a conformance, the path of an associated type, and the protocol that type conforms
     /// to. The path is a first element, then `_`, then any further elements; an element is a name,
     /// optionally followed by the protocol that declares it.
@@ -1362,6 +1379,7 @@ impl<'a> D<'a> {
                         return self.async_thunk(format!("({i}) {phrase} partial function for"));
                     }
                     b'v' => return self.outlined_variable(),
+                    b'g' => return self.generic_specialization(),
                     _ => return Err("unsupported thunk or specialization".into()),
                 };
                 self.global(prefix)
