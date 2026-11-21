@@ -38,7 +38,7 @@ fn constructed_symbols_checked_with_swift_demangle() {
 
 #[test]
 fn malformed_symbols_are_invalid() {
-    for s in ["_$s4main5ProtoTn", "_$s4main5ProtoPTn", "_$s999main5ProtoP5AssocTn"] {
+    for s in ["_$s4main5ProtoTn", "_$s4main5ProtoPTn", "_$s999main5ProtoP5AssocTn", "_$s4main5ProtoP5AssocAC_SiTn"] {
         assert_eq!(demangle(s).status, Status::Invalid, "{s}");
     }
 }

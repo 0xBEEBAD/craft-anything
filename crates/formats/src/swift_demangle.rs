@@ -1004,6 +1004,12 @@ impl<'a> D<'a> {
     /// conforming protocol are printed.
     fn associated_conformance_descriptor(&mut self) -> R<()> {
         let conforming = self.pop_protocol()?;
+        // The conforming operand must be a protocol: a named protocol from a
+        // context, or a standard library protocol. A non-protocol type (such as
+        // `Swift.Int`) is rejected here, matching swift-demangle.
+        if !matches!(conforming, N::Nominal { kind: 'P', .. }) {
+            return Err("expected a protocol".into());
+        }
         let mut parts = Vec::new();
         let mut closed = false;
         while !closed {
