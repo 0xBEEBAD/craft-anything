@@ -178,6 +178,8 @@ enum EKind {
     VarInit,
     IvarDestroyer,
     IvarInitializer,
+    PropertyWrapperBackingInitializer,
+    PropertyWrapperInitFromProjected,
 }
 
 struct D<'a> {
@@ -1449,6 +1451,8 @@ impl<'a> D<'a> {
                     b'd' => EKind::Deinit,
                     b'E' => EKind::IvarDestroyer,
                     b'e' => EKind::IvarInitializer,
+                    b'P' => EKind::PropertyWrapperBackingInitializer,
+                    b'W' => EKind::PropertyWrapperInitFromProjected,
                     b'U' | b'u' => {
                         let i = self.index()?;
                         let ty = self.pop_type()?;
@@ -1835,6 +1839,8 @@ fn render(n: &N, depth: usize) -> String {
                 EKind::DeallocDeinit => format!("{c}.__deallocating_deinit"),
                 EKind::IvarDestroyer => format!("{c}.__ivar_destroyer"),
                 EKind::IvarInitializer => format!("{c}.__ivar_initializer"),
+                EKind::PropertyWrapperBackingInitializer => format!("property wrapper backing initializer of {c}"),
+                EKind::PropertyWrapperInitFromProjected => format!("property wrapper init from projected value of {c}"),
                 EKind::Var => {
                     let acc = accessor.filter(|a| !a.is_empty()).map(|a| format!(".{a}")).unwrap_or_default();
                     format!("{c}.{}{acc} : {}", name.clone().unwrap_or_default(), ty.as_ref().map(|t| render(t, d)).unwrap_or_default())
