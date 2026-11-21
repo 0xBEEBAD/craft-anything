@@ -5,7 +5,9 @@
 use super::{Candidate, WindowShot, choose, no_window};
 use craft_anything_evidence::{ErrorCode, ToolError};
 use x11rb::connection::Connection;
+use x11rb::errors::ReplyError;
 use x11rb::image::{Image, PixelLayout};
+use x11rb::protocol::ErrorKind;
 use x11rb::protocol::xproto::{Atom, AtomEnum, ConnectionExt, GetPropertyReply, MapState, Window};
 use x11rb::rust_connection::RustConnection;
 
@@ -33,6 +35,18 @@ pub(super) fn connect() -> Result<(RustConnection, usize), ToolError> {
 
 fn x_error(e: impl std::fmt::Display) -> ToolError {
     ToolError::new(ErrorCode::ProgramFailed, format!("The X display didn't answer: {e}"))
+}
+
+/// A window can close between being listed and pictured. The server then refuses the request
+/// for that window, which means it's gone (look again, or at another process's window), not that
+/// the display failed; anything else is `failed`.
+fn gone_or(e: ReplyError, failed: impl FnOnce(ReplyError) -> ToolError) -> ToolError {
+    match &e {
+        ReplyError::X11Error(x) if matches!(x.error_kind, ErrorKind::Window | ErrorKind::Drawable | ErrorKind::Match) => {
+            ToolError::new(ErrorCode::NotFound, "The program's window closed before it could be pictured.")
+        }
+        _ => failed(e),
+    }
 }
 
 /// A window property, or `None` when it isn't set or the window has gone.
@@ -95,11 +109,11 @@ pub(super) fn capture(pid: u32, app_name: Option<&str>) -> Result<WindowShot, To
             missing
         });
     };
-    let at = conn.translate_coordinates(*id, screen.root, 0, 0).map_err(x_error)?.reply().map_err(x_error)?;
+    let at = conn.translate_coordinates(*id, screen.root, 0, 0).map_err(x_error)?.reply().map_err(|e| gone_or(e, x_error))?;
     let (x, y, width, height) = on_screen(at.dst_x, at.dst_y, chosen.width, chosen.height, screen.width_in_pixels, screen.height_in_pixels)
         .ok_or_else(|| ToolError::new(ErrorCode::NotFound, "The program's window is off the screen, so it can't be pictured."))?;
-    let (image, visual) =
-        Image::get(&conn, *id, x, y, width, height).map_err(|e| ToolError::new(ErrorCode::ProgramFailed, format!("Couldn't picture the window: {e}")))?;
+    let (image, visual) = Image::get(&conn, *id, x, y, width, height)
+        .map_err(|e| gone_or(e, |e| ToolError::new(ErrorCode::ProgramFailed, format!("Couldn't picture the window: {e}"))))?;
     let layout = screen
         .allowed_depths
         .iter()
@@ -130,6 +144,28 @@ mod tests {
         assert_eq!(class_name(b"mygame\0MyGame\0"), "MyGame");
         assert_eq!(class_name(b"mygame\0\0"), "mygame", "only an instance name");
         assert_eq!(class_name(b""), "");
+    }
+
+    /// A window that closed while it was looked at is "no window" (so the search goes on to other
+    /// processes and looks again), but another refusal is still a failure.
+    #[test]
+    fn a_window_that_closed_meanwhile_is_not_found() {
+        let refused = |error_kind| {
+            ReplyError::X11Error(x11rb::x11_utils::X11Error {
+                error_kind,
+                error_code: 0,
+                sequence: 0,
+                bad_value: 0,
+                minor_opcode: 0,
+                major_opcode: 0,
+                extension_name: None,
+                request_name: None,
+            })
+        };
+        for kind in [ErrorKind::Window, ErrorKind::Drawable, ErrorKind::Match] {
+            assert_eq!(gone_or(refused(kind), x_error).code, ErrorCode::NotFound, "{kind:?}");
+        }
+        assert_eq!(gone_or(refused(ErrorKind::Alloc), x_error).code, ErrorCode::ProgramFailed);
     }
 
     #[test]
