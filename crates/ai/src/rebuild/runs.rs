@@ -142,7 +142,8 @@ impl RunSet {
             let root = ws.root.clone();
             let mut keep = ws.clone();
             let saved = queued_request::QueuedRequest::from_options(&opts);
-            match (self.starter)(hub, ws, opts) {
+            let started = queued_request::validate(&ws).and_then(|()| (self.starter)(hub, ws, opts));
+            match started {
                 Ok(run) => {
                     queued_request::finished(&keep, saved.as_ref());
                     self.alone = alone.then(|| root.clone());
@@ -356,6 +357,49 @@ mod tests {
         let mut reopened = RunSet::new(1).with_starter(remembering_requests(seen.clone()));
         reopened.start(&hub, b, RunOptions::default()).unwrap();
         assert_eq!(seen.lock().unwrap()[0].0.as_deref(), Some("Retry this request"));
+    }
+
+    #[test]
+    fn a_changed_unreadable_request_stops_its_queued_start_and_leaves_the_next_project_free() {
+        for (case, contents) in
+            [("malformed", Some(b"{broken".as_slice())), ("newer", Some(br#"{"version":3,"message":"A later request"}"#.as_slice())), ("unreadable", None)]
+        {
+            let d = tempfile::tempdir().unwrap();
+            let blocker = Workspace::create(d.path(), "Blocker", "A game", TargetRef::None).unwrap();
+            let queued = Workspace::create(d.path(), "Queued", "A game", TargetRef::None).unwrap();
+            let next = Workspace::create(d.path(), "Next", "A game", TargetRef::None).unwrap();
+            let hub = hub();
+            let fake = StandIns::new();
+            let mut set = RunSet::new(1).with_starter(fake.starter());
+            set.start(&hub, blocker.clone(), RunOptions::default()).unwrap();
+            let opts = RunOptions { message: Some("The queued request".into()), ..Default::default() };
+            assert_eq!(set.start(&hub, queued.clone(), opts).unwrap(), Started::Queued { position: 1 });
+            assert_eq!(set.start(&hub, next.clone(), RunOptions::default()).unwrap(), Started::Queued { position: 2 });
+            let record = queued.inbox_dir().join("queued-request.json");
+            if let Some(contents) = contents {
+                std::fs::write(&record, contents).unwrap();
+            } else {
+                std::fs::remove_file(&record).unwrap();
+                std::fs::create_dir(&record).unwrap();
+                std::fs::write(record.join("keep"), b"leave unchanged").unwrap();
+            }
+            fake.finish(&blocker.root);
+            let events = set.poll(&hub);
+            assert!(
+                events.iter().any(|(root, event)| {
+                    root == &queued.root && matches!(event, RunEvent::Finished { ok: false, message, paused: false } if message.contains("queued request"))
+                }),
+                "{case}: the existing failed-start path must report the record error"
+            );
+            assert_eq!(fake.started(), [blocker.root.clone(), next.root.clone()], "{case}: the unreadable request must not reach the starter");
+            assert!(set.get(&queued.root).is_none() && set.position(&queued.root).is_none());
+            assert_eq!(Workspace::open(&queued.root).unwrap().manifest.status, Status::NeedsYou);
+            if let Some(contents) = contents {
+                assert_eq!(std::fs::read(&record).unwrap(), contents, "{case}: the saved bytes remain unchanged");
+            } else {
+                assert_eq!(std::fs::read(record.join("keep")).unwrap(), b"leave unchanged");
+            }
+        }
     }
 
     #[test]

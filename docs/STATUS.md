@@ -841,7 +841,8 @@ launch or preview was run for this documentation correction.
   saved in `inbox/queued-request.json`. Pausing, closing the app or failing to start keeps them for
   the next manual Continue or Try again, using the current builder and mode; reopening alone does
   not start a run. A missing file means no queued request, while unreadable or newer records stop
-  the start and stay unchanged. The backup is cleared after a worker starts, not after it finishes;
+  the start and stay unchanged. Queued starts check the current record again without replacing
+  the request they already hold. The backup is cleared after a worker starts, not after it finishes;
   a different request saved while it waited is kept. A queued message records the identities of
   waiting notes already included in it, so those are not repeated and independent waiting notes
   still reach the builder after a restart.

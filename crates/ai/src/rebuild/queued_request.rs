@@ -83,6 +83,12 @@ fn load(ws: &Workspace) -> Result<Option<QueuedRequest>, ToolError> {
     Ok(Some(saved))
 }
 
+/// Check the current backup without replacing a queued run's options or cleanup identity.
+/// An absent record is fine; malformed, newer or unreadable records still stop a start.
+pub(super) fn validate(ws: &Workspace) -> Result<(), ToolError> {
+    load(ws).map(|_| ())
+}
+
 /// Restore before deciding whether the run needs Study or a place to itself. A new explicit
 /// message takes precedence, but an unreadable older request is never silently discarded.
 pub(super) fn restore(ws: &Workspace, opts: &mut RunOptions) -> Result<Option<QueuedRequest>, ToolError> {
