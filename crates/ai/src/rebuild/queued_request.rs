@@ -1,7 +1,8 @@
-//! The person's request while a run waits for a build slot. Only its words and attachments are
-//! kept: restarting still uses the current builder, mode and limits, and never starts a run by itself.
+//! A follow-up waiting for a build slot: the person's words, copied attachments and identities of
+//! waiting notes it already carries. Restarting uses the current builder, mode and limits, and
+//! never starts a run by itself.
 
-use super::{RunOptions, Workspace};
+use super::{RunOptions, Workspace, notes};
 use craft_anything_engine::versioned;
 use craft_anything_evidence::{ErrorCode, ToolError};
 use craft_anything_platform::fs::{read_file_capped, write_atomic};
@@ -11,10 +12,21 @@ use serde_json::Value;
 use std::path::PathBuf;
 
 const FILE: &str = "inbox/queued-request.json";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const MAX_BYTES: u64 = 16 * 1024 * 1024;
-const STEPS: &[versioned::Step<Value>] = &[];
+const STEPS: &[versioned::Step<Value>] = &[v1_to_v2];
 const _: () = assert!(1 + STEPS.len() == VERSION as usize);
+
+fn v1_to_v2(doc: &mut Value) -> Result<(), String> {
+    let doc = doc.as_object_mut().ok_or("the queued request is not an object")?;
+    if doc.contains_key("carried_notes") {
+        return Err("version 1 did not record carried notes".into());
+    }
+    // Older requests had no proof that a waiting note was included; keep those notes.
+    doc.insert("carried_notes".into(), serde_json::json!([]));
+    doc.insert("version".into(), Value::from(2));
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -24,12 +36,20 @@ pub(super) struct QueuedRequest {
     shown: Option<String>,
     #[serde(default)]
     shown_pictures: Vec<PathBuf>,
+    #[serde(default)]
+    carried_notes: Vec<notes::Carried>,
 }
 
 impl QueuedRequest {
     pub(super) fn from_options(opts: &RunOptions) -> Option<Self> {
         let message = opts.message.as_ref().filter(|m| !m.trim().is_empty())?;
-        Some(Self { version: VERSION, message: message.clone(), shown: opts.shown.clone(), shown_pictures: opts.shown_pictures.clone() })
+        Some(Self {
+            version: VERSION,
+            message: message.clone(),
+            shown: opts.shown.clone(),
+            shown_pictures: opts.shown_pictures.clone(),
+            carried_notes: opts.carried_notes.clone(),
+        })
     }
 }
 
@@ -73,6 +93,7 @@ pub(super) fn restore(ws: &Workspace, opts: &mut RunOptions) -> Result<Option<Qu
         opts.message = Some(saved.message.clone());
         opts.shown.clone_from(&saved.shown);
         opts.shown_pictures.clone_from(&saved.shown_pictures);
+        opts.carried_notes.clone_from(&saved.carried_notes);
     }
     Ok(saved)
 }
@@ -140,6 +161,23 @@ mod tests {
         assert_eq!(opts.backend.as_deref(), Some("Current builder"));
         assert_eq!(opts.max_rounds, 2);
         assert_eq!(opts.clean_room, Some(true));
+        assert!(opts.carried_notes.is_empty(), "a version-1 request proves no waiting notes were carried");
+    }
+
+    #[test]
+    fn a_saved_request_restores_its_carried_note_identities() {
+        let (_dir, ws) = project();
+        let note = notes::Carried {
+            id: 7,
+            note: notes::Left { text: "Add a search box".into(), shown: "Add search".into(), pictures: vec![PathBuf::from("attachments/search.png")] },
+        };
+        let opts = RunOptions { carried_notes: vec![note.clone()], ..request("Add a search box") };
+        save(&ws, &opts).unwrap();
+        let mut restored = RunOptions::default();
+        restore(&Workspace::open(&ws.root).unwrap(), &mut restored).unwrap();
+        assert_eq!(restored.carried_notes, [note]);
+        assert_eq!(restored.message, opts.message);
+        assert_eq!(load(&ws).unwrap().unwrap().version, VERSION);
     }
 
     #[test]
@@ -175,7 +213,7 @@ mod tests {
             "{unfinished",
             r#"{"message":"No version"}"#,
             r#"{"version":0,"message":"No such old format"}"#,
-            r#"{"version":2,"message":"Keep the newer data","future":true}"#,
+            r#"{"version":3,"message":"Keep the newer data","future":true}"#,
             r#"{"version":1,"message":"Known format","unexpected":true}"#,
             r#"{"version":1,"message":"   "}"#,
             r#"{"version":1,"message":12}"#,

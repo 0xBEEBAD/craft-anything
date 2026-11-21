@@ -133,6 +133,9 @@ pub struct RunOptions {
     /// The pictures attached to `shown` (their copies in the project), so the feed keeps them
     /// with the message for Up to bring back.
     pub shown_pictures: Vec<PathBuf>,
+    /// Waiting notes already included in `message`, with their saved identities. Other waiting
+    /// notes must still be delivered, including after a queued request is restored.
+    pub carried_notes: Vec<notes::Carried>,
     /// Pick up a build whose last run stopped part-way (paused, the app closed, the computer
     /// stopped): Study isn't repeated when it was done, and an agent with a saved session is
     /// told to carry on rather than given the brief again. A run with no message on a project
@@ -162,6 +165,7 @@ impl Default for RunOptions {
             message: None,
             shown: None,
             shown_pictures: Vec::new(),
+            carried_notes: Vec::new(),
             continuing: false,
             max_rounds: 6,
             good_enough: 90.0,
@@ -271,9 +275,16 @@ impl RebuildRun {
         // The project as it is now. A run that waited in the queue, or one started as the project's
         // last run was ending, holds a copy from before that run's last saves (its session), and
         // everything below, the worker's saves included, works from this copy.
-        let mut ws = Workspace::open(&ws.root).unwrap_or(ws);
+        let ws = Workspace::open(&ws.root).unwrap_or(ws);
         let queued = queued_request::restore(&ws, &mut opts)?;
-        let queued_workspace = ws.clone();
+        let run = Self::start_prepared(hub, ws.clone(), opts)?;
+        queued_request::finished(&ws, queued.as_ref());
+        Ok(run)
+    }
+
+    /// Start the snapshot already prepared by `RunSet`, which owns its queued-request cleanup.
+    /// Reading the saved request again here could retire a newer request than the one starting.
+    fn start_prepared(hub: &AiHub, mut ws: Workspace, opts: RunOptions) -> Result<RebuildRun, ToolError> {
         let cfg = hub.config();
         let entry = builder_backend(&cfg, opts.backend.as_deref().or_else(|| project_builder(&cfg, &ws)))?;
         // The person's choice of mode is a session setting. A run that waited its turn uses the mode
@@ -322,7 +333,8 @@ impl RebuildRun {
         let inbox = Inbox::new(ws.inbox_dir());
         // Notes an earlier run never handed over (the app closed while they waited, #1620) wait for
         // this run's builder; their old files go before the app can add any to this one.
-        let left = notes::take_left(&notes::notes_dir(&ws.inbox_dir()), opts.message.is_none());
+        let carried = if opts.message.as_ref().is_some_and(|message| !message.trim().is_empty()) { opts.carried_notes.as_slice() } else { &[] };
+        let left = notes::take_uncarried(&notes::notes_dir(&ws.inbox_dir()), carried);
         craft_anything_engine::inbox::clear_activity(&ws.inbox_dir());
         if !left.is_empty() {
             left_notes_are_a_request(&mut ws);
@@ -374,7 +386,6 @@ impl RebuildRun {
                 r2.store(false, Ordering::SeqCst);
             })
             .map_err(|e| ToolError::internal(e.to_string()))?;
-        queued_request::finished(&queued_workspace, queued.as_ref());
         let activity = feed.lock().unwrap_or_else(PoisonError::into_inner).activity();
         let run = RebuildRun { rx, stop, inbox, running, preview, notes, clean_room, feed, root, started: Instant::now(), activity };
         // Waiting again with files of their own: the builder takes them at its next step or after

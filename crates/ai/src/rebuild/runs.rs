@@ -8,7 +8,8 @@
 use super::*;
 use std::collections::{HashMap, VecDeque};
 
-/// How a run is started; [`RebuildRun::start`] unless a fork or a test swaps it.
+/// How a prepared run is started; the built-in worker unless a fork or a test swaps it.
+/// `RunSet` has already restored its request and owns cleanup of the saved record.
 pub type Starter = Box<dyn FnMut(&AiHub, Workspace, RunOptions) -> Result<RebuildRun, ToolError> + Send>;
 
 /// What [`RunSet::start`] did.
@@ -66,7 +67,7 @@ impl std::fmt::Debug for RunSet {
 impl RunSet {
     /// At most `limit` runs work at once (at least one).
     pub fn new(limit: usize) -> RunSet {
-        RunSet { limit: limit.max(1), runs: HashMap::new(), queue: VecDeque::new(), alone: None, starter: Box::new(RebuildRun::start), watched: false }
+        RunSet { limit: limit.max(1), runs: HashMap::new(), queue: VecDeque::new(), alone: None, starter: Box::new(RebuildRun::start_prepared), watched: false }
     }
 
     /// A run may start now: there's a place, and neither it nor anyone working needs to be alone.
@@ -130,8 +131,7 @@ impl RunSet {
         }
         while self.queue.front().is_some_and(|(_, _, alone)| self.has_room(*alone)) {
             let Some((ws, opts, _)) = self.queue.pop_front() else { break };
-            // The project as it is now (its Builder may have been changed while it waited), the copy
-            // `RebuildRun::start` reads too.
+            // The project as it is now, with the saved session from its preceding run.
             let ws = Workspace::open(&ws.root).unwrap_or(ws);
             // The Builder may have been changed while it waited.
             let alone = must_work_alone(hub, &ws, &opts);
@@ -382,6 +382,34 @@ mod tests {
         let mut reopened = RunSet::new(1).with_starter(remembering_requests(seen.clone()));
         reopened.start(&hub, b, RunOptions::default()).unwrap();
         assert_eq!(seen.lock().unwrap()[0].0, None);
+    }
+
+    #[test]
+    fn the_default_starter_keeps_a_request_saved_after_queueing() {
+        let d = tempfile::tempdir().unwrap();
+        let blocker = Workspace::create(d.path(), "Blocker", "A game", TargetRef::None).unwrap();
+        let ws = Workspace::create(d.path(), "Queued", "A game", TargetRef::None).unwrap();
+        let hub = AiHub::with_stores(hub().engine.clone(), d.path().join("settings.toml"), crate::KeyStore::file_only(d.path().join("keys.toml")));
+        let fake = StandIns::new();
+        let mut set = RunSet::new(1);
+        // Only the occupied slot is a stand-in. Poll must use the real default starter for A.
+        set.runs.insert(blocker.root.clone(), fake.starter()(&hub, blocker.clone(), RunOptions::default()).unwrap());
+        let opts = RunOptions { message: Some("Queued request A".into()), shown: Some("Queued request A".into()), ..Default::default() };
+        assert_eq!(set.start(&hub, ws.clone(), opts).unwrap(), Started::Queued { position: 1 });
+        queued_request::save(&ws, &RunOptions { message: Some("Later request B".into()), ..Default::default() }).unwrap();
+        fake.finish(&blocker.root);
+        set.poll(&hub);
+        let run = set.get_mut(&ws.root).expect("the queued run started");
+        assert!(run.feed_now().iter().any(|item| matches!(item, feed::FeedItem::User(user) if user.text() == "Queued request A")));
+        run.stop();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while run.is_running() {
+            assert!(Instant::now() < deadline, "the run did not stop");
+            let _ = run.rx.recv_timeout(Duration::from_millis(50));
+        }
+        let mut next = RunOptions::default();
+        queued_request::restore(&ws, &mut next).unwrap();
+        assert_eq!(next.message.as_deref(), Some("Later request B"), "starting A must not retire B's backup");
     }
 
     #[test]
