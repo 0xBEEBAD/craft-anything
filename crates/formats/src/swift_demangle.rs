@@ -1362,6 +1362,9 @@ impl<'a> D<'a> {
                         return self.async_thunk(format!("({i}) {phrase} partial function for"));
                     }
                     b'v' => return self.outlined_variable(),
+                    b'x' => "dynamically replaceable key for",
+                    b'X' => "dynamically replaceable variable for",
+                    b'I' => "dynamically replaceable thunk for",
                     _ => return Err("unsupported thunk or specialization".into()),
                 };
                 self.global(prefix)
