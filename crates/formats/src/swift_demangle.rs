@@ -1101,21 +1101,56 @@ impl<'a> D<'a> {
             b'B' => {
                 let t = match self.next()? {
                     b'b' => "Builtin.BridgeObject".to_string(),
+                    b'c' => "Builtin.RawUnsafeContinuation".into(),
+                    b'd' => "Builtin.NonDefaultDistributedActorStorage".into(),
+                    b'e' => "Builtin.Executor".into(),
+                    b'j' => "Builtin.Job".into(),
                     b'o' => "Builtin.NativeObject".into(),
                     b'O' => "Builtin.UnknownObject".into(),
                     b'p' => "Builtin.RawPointer".into(),
                     b't' => "Builtin.SILToken".into(),
                     b'w' => "Builtin.Word".into(),
+                    b'A' => "Builtin.ImplicitActor".into(),
                     b'B' => "Builtin.UnsafeValueBuffer".into(),
+                    b'D' => "Builtin.DefaultActorStorage".into(),
+                    b'I' => "Builtin.IntLiteral".into(),
+                    b'P' => "Builtin.PackIndex".into(),
+                    b'T' => "Builtin.TheTupleType".into(),
                     b'i' => {
                         let n = self.natural().ok_or("builtin width")?;
-                        self.next_if(b'_');
+                        let is_vec = self.peek() == Some(b'_')
+                            && self.s.get(self.pos + 1) == Some(&b'B')
+                            && self.s.get(self.pos + 2) == Some(&b'v')
+                            && self.s.get(self.pos + 3).map(u8::is_ascii_digit).unwrap_or(false);
+                        if !is_vec {
+                            self.next_if(b'_');
+                        }
                         format!("Builtin.Int{n}")
                     }
                     b'f' => {
                         let n = self.natural().ok_or("builtin width")?;
-                        self.next_if(b'_');
+                        let is_vec = self.peek() == Some(b'_')
+                            && self.s.get(self.pos + 1) == Some(&b'B')
+                            && self.s.get(self.pos + 2) == Some(&b'v')
+                            && self.s.get(self.pos + 3).map(u8::is_ascii_digit).unwrap_or(false);
+                        if !is_vec {
+                            self.next_if(b'_');
+                        }
                         format!("Builtin.FPIEEE{n}")
+                    }
+                    b'v' => {
+                        let count = self.natural().ok_or("builtin vector count")?;
+                        self.next_if(b'_');
+                        if self.pop_if(|n| matches!(n, N::FirstMarker)).is_none() {
+                            return Err("builtin vector without element marker".into());
+                        }
+                        let elem = self.pop()?;
+                        let elem = match elem {
+                            N::Builtin(s) => s,
+                            _ => return Err("builtin vector element is not a builtin".into()),
+                        };
+                        let elem = elem.strip_prefix("Builtin.").unwrap_or(&elem);
+                        format!("Builtin.Vec{count}x{elem}")
                     }
                     _ => return Err("unsupported builtin type".into()),
                 };
