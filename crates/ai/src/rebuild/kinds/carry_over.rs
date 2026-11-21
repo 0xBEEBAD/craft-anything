@@ -62,9 +62,20 @@ pub struct Page {
 pub fn pages(ws: &Workspace) -> Vec<Page> {
     let read = |dir: &Path| std::fs::read(dir.join("capture.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
     let capture = ws.capture_dir();
-    let start = read(&capture).map(|c| Page { path: "/".into(), capture: c });
+    let start_path = match &ws.manifest.target {
+        TargetRef::Website { url } => path_of(url),
+        _ => "/".into(),
+    };
+    let start = read(&capture).map(|c| Page { path: start_path, capture: c });
     let others = routes(ws).into_iter().filter_map(|r| read(&capture.join("routes").join(&r.slug)).map(|c| Page { path: r.path, capture: c }));
     start.into_iter().chain(others).collect()
+}
+
+/// The path of a web address (`https://a.com/shop?x=1` is `/shop`), `/` for the site's root.
+fn path_of(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let rest = rest.split(['?', '#']).next().unwrap_or_default();
+    rest.find('/').map_or_else(|| "/".into(), |at| rest[at..].to_string())
 }
 
 fn list<'a>(v: &'a Value, key: &str) -> impl Iterator<Item = &'a Value> {
@@ -148,16 +159,19 @@ fn dedup<'a>(paths: &[&'a str]) -> Vec<&'a str> {
 /// The pictures the owner supplies: each one's address, size and alt text from the capture. A
 /// clean-room capture keeps only sizes in `assets.images`, so its outline gives the addresses.
 fn pictures(pages: &[Page]) -> String {
-    let mut seen: Vec<(String, String, String)> = Vec::new();
+    // Each picture's full address (the key, as a query can tell two pictures apart), then the
+    // address shown, its size and alt text.
+    let mut seen: Vec<(String, String, String, String)> = Vec::new();
     for p in pages {
         let assets: Vec<&Value> =
             p.capture.pointer("/assets/images").and_then(Value::as_array).into_iter().flatten().filter(|i| !text(i, "src").is_empty()).collect();
-        let found: Vec<(String, String, String)> = if assets.is_empty() {
+        let found: Vec<(String, String, String, String)> = if assets.is_empty() {
             list(&p.capture, "outline")
                 .filter(|i| text(i, "tag") == "img" && !text(i, "src").is_empty())
                 .map(|i| {
                     let size = |k: &str| i.pointer(&format!("/box/{k}")).and_then(Value::as_u64).unwrap_or(0);
-                    (bare(text(i, "src")).to_string(), format!("shown at {}×{}", size("w"), size("h")), text(i, "alt").to_string())
+                    let src = text(i, "src");
+                    (src.to_string(), bare(src).to_string(), format!("shown at {}×{}", size("w"), size("h")), text(i, "alt").to_string())
                 })
                 .collect()
         } else {
@@ -165,12 +179,13 @@ fn pictures(pages: &[Page]) -> String {
                 .iter()
                 .map(|i| {
                     let size = |k: &str| i.get(k).and_then(Value::as_u64).unwrap_or(0);
-                    (bare(text(i, "src")).to_string(), format!("{}×{}", size("w"), size("h")), text(i, "alt").to_string())
+                    let src = text(i, "src");
+                    (src.to_string(), bare(src).to_string(), format!("{}×{}", size("w"), size("h")), text(i, "alt").to_string())
                 })
                 .collect()
         };
         for f in found {
-            if !seen.iter().any(|s| s.0 == f.0) || f.0 == "an inline picture" {
+            if !seen.iter().any(|s| s.0 == f.0) {
                 seen.push(f);
             }
         }
@@ -181,10 +196,10 @@ fn pictures(pages: &[Page]) -> String {
     let named: Vec<String> = seen
         .iter()
         .take(MAX_PICTURES)
-        .map(|(src, size, alt)| if alt.is_empty() { format!("{src} ({size}, no alt text)") } else { format!("{src} ({size}, alt \"{alt}\")") })
+        .map(|(_, src, size, alt)| if alt.is_empty() { format!("{src} ({size}, no alt text)") } else { format!("{src} ({size}, alt \"{alt}\")") })
         .collect();
     let more = seen.len().saturating_sub(MAX_PICTURES);
-    let more = if more == 0 { String::new() } else { format!("; and {more} more in capture/capture.json") };
+    let more = if more == 0 { String::new() } else { format!("; and {more} more in the captured pages' capture.json files") };
     format!(
         "- Pictures the owner supplies: {} seen. The capture saved no picture files, only their addresses, sizes and alt text, so the build uses placeholders for photos and logos unless you confirm you own them; fetching or publishing each one is a separate yes. {}{more}.",
         seen.len(),
@@ -252,6 +267,32 @@ mod tests {
         assert!(pictures.contains("100×40") && pictures.contains("Logo"), "{s}");
         let seen = s.lines().find(|l| l.starts_with("- Seen")).expect(&s);
         assert!(seen.contains("sign-ins"), "a page asking for a password is a sign-in: {s}");
+    }
+
+    /// The start page is where the target points, not always the site's root.
+    #[test]
+    fn the_start_page_is_named_by_its_own_path() {
+        let d = tempfile::tempdir().unwrap();
+        let ws = Workspace::create(d.path(), "Shop", "Clone it", TargetRef::Website { url: "https://a.com/shop?ref=ad".into() }).unwrap();
+        std::fs::create_dir_all(ws.capture_dir()).unwrap();
+        std::fs::write(ws.capture_dir().join("capture.json"), r#"{"forms": [{"action": "/checkout"}]}"#).unwrap();
+        let s = carry_over(&pages(&ws)).unwrap();
+        assert!(s.contains("1 form(s) on /shop)"), "{s}");
+        assert_eq!(path_of("https://a.com"), "/");
+    }
+
+    /// Addresses are shown without their query, but two pictures told apart only by it are both
+    /// listed, and those past the named ones are looked for in every captured page.
+    #[test]
+    fn pictures_told_apart_by_their_query_are_each_counted() {
+        let img = |id: &str| json!({"src": format!("https://a.com/image?id={id}"), "w": 10, "h": 10});
+        let start = page("/", json!({"assets": {"images": [img("hero"), img("logo"), img("hero")]}}));
+        let s = carry_over(&[start]).unwrap();
+        assert!(s.contains("Pictures the owner supplies: 2 seen"), "{s}");
+        assert!(!s.contains("id="), "{s}");
+        let many: Vec<Value> = (0..MAX_PICTURES + 1).map(|i| img(&i.to_string())).collect();
+        let s = carry_over(&[page("/", json!({})), page("/shop", json!({"assets": {"images": many}}))]).unwrap();
+        assert!(s.contains("1 more in the captured pages'"), "{s}");
     }
 
     #[test]
