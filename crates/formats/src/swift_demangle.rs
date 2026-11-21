@@ -1335,6 +1335,8 @@ impl<'a> D<'a> {
                     b'O' => "@nonobjc",
                     b'q' => "method descriptor for",
                     b'j' => "dispatch thunk of",
+                    b'E' => "distributed thunk",
+                    b'F' => "distributed accessor for",
                     b'D' => "dynamic",
                     b'd' => "direct method reference to",
                     b'A' => "partial apply forwarder for",
