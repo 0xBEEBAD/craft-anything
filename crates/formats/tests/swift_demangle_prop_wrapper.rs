@@ -51,7 +51,17 @@ fn constructed_property_wrapper_symbols_decode() {
 /// Malformed operands are rejected instead of guessed.
 #[test]
 fn a_malformed_property_wrapper_operand_is_invalid() {
-    for symbol in ["_$s3Foo5MyBarVpfP", "_$s3Foo3abcSSfP", "_$s3Foo3abcSSvpfP_", "_$s3Foo3abcSSvpfPX", "_$s3Foo3abcSSvpf", "_$s3Foo3abcSSvpfP0_"] {
+    for symbol in [
+        "_$s3Foo5MyBarVpfP",
+        "_$s3Foo3abcSSfP",
+        "_$s3Foo3abcSSvpfP_",
+        "_$s3Foo3abcSSvpfPX",
+        "_$s3Foo3abcSSvpf",
+        "_$s3Foo3abcSSvpfP0_",
+        "_$s3FoofP",
+        "_$s3FoofW",
+        "_$s3Foo3barfP",
+    ] {
         assert_eq!(demangle(symbol).status, Status::Invalid, "{symbol}");
     }
 }

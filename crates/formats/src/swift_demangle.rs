@@ -1502,7 +1502,13 @@ impl<'a> D<'a> {
                         self.push(N::Entity { kind, ctx: Box::new(ctx), name: None, labels, ty: Some(Box::new(ty)), accessor: None, is_static: false })
                     }
                     _ => {
-                        let ctx = self.pop_context()?;
+                        let ctx = match kind {
+                            EKind::PropertyWrapperBackingInitializer | EKind::PropertyWrapperInitFromProjected => match self.pop()? {
+                                v @ N::Entity { kind: EKind::Var, .. } => v,
+                                _ => return Err("expected a variable".into()),
+                            },
+                            _ => self.pop_context()?,
+                        };
                         self.push(N::Entity { kind, ctx: Box::new(ctx), name: None, labels: Vec::new(), ty: None, accessor: None, is_static: false })
                     }
                 }
