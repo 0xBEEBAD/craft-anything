@@ -1367,6 +1367,9 @@ impl<'a> D<'a> {
                     b'I' => "dynamically replaceable thunk for",
                     _ => return Err("unsupported thunk or specialization".into()),
                 };
+                if matches!(k, b'x' | b'X' | b'I') && matches!(self.stack.last(), Some(N::FirstMarker)) {
+                    return Err("dynamically replaceable operand is a parser marker".into());
+                }
                 self.global(prefix)
             }
             b'W' => {

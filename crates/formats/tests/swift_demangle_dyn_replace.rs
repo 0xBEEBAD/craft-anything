@@ -33,7 +33,17 @@ fn constructed_dynamically_replaceable_symbols_decode() {
 
 #[test]
 fn an_operand_that_is_not_valid_is_invalid() {
-    for symbol in ["_$s4main1xSivp_Tx", "_$s3Foo5MyBarV_Tx", "_$s3Foo5MyBarV3abcTx", "_$s3Foo1A3abcTx", "_$s4main1xSivp_TX", "_$s4main1xSivp_TI"] {
+    for symbol in [
+        "_$s4main1xSivp_Tx",
+        "_$s3Foo5MyBarV_Tx",
+        "_$s3Foo5MyBarV3abcTx",
+        "_$s3Foo1A3abcTx",
+        "_$s4main1xSivp_TX",
+        "_$s4main1xSivp_TI",
+        "_$s_Tx",
+        "_$s_TX",
+        "_$s_TI",
+    ] {
         assert_eq!(demangle(symbol).status, Status::Invalid, "{symbol}");
     }
 }
