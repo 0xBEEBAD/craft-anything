@@ -1118,31 +1118,21 @@ impl<'a> D<'a> {
                     b'T' => "Builtin.TheTupleType".into(),
                     b'i' => {
                         let n = self.natural().ok_or("builtin width")?;
-                        let is_vec = self.peek() == Some(b'_')
-                            && self.s.get(self.pos + 1) == Some(&b'B')
-                            && self.s.get(self.pos + 2) == Some(&b'v')
-                            && self.s.get(self.pos + 3).map(u8::is_ascii_digit).unwrap_or(false);
-                        if !is_vec {
-                            self.next_if(b'_');
-                        }
+                        self.next_if(b'_');
                         format!("Builtin.Int{n}")
                     }
                     b'f' => {
                         let n = self.natural().ok_or("builtin width")?;
-                        let is_vec = self.peek() == Some(b'_')
-                            && self.s.get(self.pos + 1) == Some(&b'B')
-                            && self.s.get(self.pos + 2) == Some(&b'v')
-                            && self.s.get(self.pos + 3).map(u8::is_ascii_digit).unwrap_or(false);
-                        if !is_vec {
-                            self.next_if(b'_');
-                        }
+                        self.next_if(b'_');
                         format!("Builtin.FPIEEE{n}")
                     }
                     b'v' => {
                         let count = self.natural().ok_or("builtin vector count")?;
-                        self.next_if(b'_');
-                        if self.pop_if(|n| matches!(n, N::FirstMarker)).is_none() {
-                            return Err("builtin vector without element marker".into());
+                        if count == 0 || count > 4096 {
+                            return Err("builtin vector count out of range".into());
+                        }
+                        if !self.next_if(b'_') {
+                            return Err("builtin vector count terminator".into());
                         }
                         let elem = self.pop()?;
                         let elem = match elem {

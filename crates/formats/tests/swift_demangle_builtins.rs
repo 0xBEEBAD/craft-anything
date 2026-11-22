@@ -54,4 +54,7 @@ fn malformed_builtin_types_are_invalid() {
     invalid("_$sBiN");
     invalid("_$sBfN");
     invalid("_$sBzN");
+    invalid("_$sBi64_Bv0_N");
+    invalid("_$sBi64_Bv4097_N");
+    invalid("_$sBi64_Bv8N");
 }
