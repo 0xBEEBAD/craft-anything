@@ -985,6 +985,9 @@ impl<'a> D<'a> {
             return Err("generic specialization without a marker".into());
         }
         let arg = self.pop_type()?;
+        if matches!(arg, N::Global { .. } | N::Entity { .. } | N::Conformance { .. }) {
+            return Err("expected a type".into());
+        }
         let base = self.pop_type()?;
         self.push(N::Global { prefix: format!("generic specialization <{}> of", render(&arg, 0)), inner: Box::new(base), suffix: String::new() })
     }
