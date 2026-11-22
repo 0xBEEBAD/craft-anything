@@ -1587,7 +1587,7 @@ impl<'a> D<'a> {
             b'y' => self.push(N::EmptyList),
             b'h' => {
                 let t = self.pop_type()?;
-                self.push(N::Attributed { text: "__shared ", inner: Box::new(t), wrapped: false })
+                self.push(N::Attributed { text: "__shared ", inner: Box::new(t), wrapped: true })
             }
             b'z' => {
                 let t = self.pop_type()?;
