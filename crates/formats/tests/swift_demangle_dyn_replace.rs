@@ -43,6 +43,9 @@ fn an_operand_that_is_not_valid_is_invalid() {
         "_$s_Tx",
         "_$s_TX",
         "_$s_TI",
+        "_$s3fooTx",
+        "_$s3fooTX",
+        "_$s3fooTI",
     ] {
         assert_eq!(demangle(symbol).status, Status::Invalid, "{symbol}");
     }
