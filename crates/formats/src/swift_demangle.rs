@@ -1443,8 +1443,19 @@ impl<'a> D<'a> {
                 self.push(f)
             }
             b'd' => {
+                // A variadic marker may follow a tuple element label, which sits
+                // above the type on the stack. Preserve the label so tuple parsing
+                // can attach it, and mark only the type as variadic.
+                let label = match self.stack.last() {
+                    Some(N::Ident(_)) => self.stack.pop(),
+                    _ => None,
+                };
                 let t = self.witness_type()?;
-                self.push(N::Variadic(Box::new(t)))
+                self.push(N::Variadic(Box::new(t)))?;
+                if let Some(l) = label {
+                    self.push(l)?;
+                }
+                Ok(())
             }
             b'f' => {
                 let k = self.next()?;
