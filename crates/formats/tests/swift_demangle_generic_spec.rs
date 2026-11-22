@@ -21,7 +21,7 @@ fn constructed_generic_specialization_symbols_decode() {
 
 #[test]
 fn malformed_generic_specialization_is_invalid() {
-    for symbol in ["_$sSa5countSivgs5UInt8V_Tg", "_$sSa5countSivgs5UInt8V_Tgx", "_$sSa5countSivg_Tg5", "_$s4main3fooyyFSiN_Tg5"] {
+    for symbol in ["_$sSa5countSivgs5UInt8V_Tg", "_$sSa5countSivgs5UInt8V_Tgx", "_$sSa5countSivg_Tg5", "_$s4main3fooyyFSiN_Tg5", "_$s4main3fooyxxFSiNSg_Tg5"] {
         assert_eq!(demangle(symbol).status, Status::Invalid, "{symbol}");
     }
 }
