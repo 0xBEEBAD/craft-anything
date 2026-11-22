@@ -29,6 +29,9 @@ fn constructed_dynamically_replaceable_symbols_decode() {
     assert_eq!(dm("_$s4main3fooyyFTI"), "dynamically replaceable thunk for main.foo() -> ()");
     assert_eq!(dm("_$s4main6WidgetC5countSivgTX"), "dynamically replaceable variable for main.Widget.count.getter : Swift.Int");
     assert_eq!(dm("_$s4main6WidgetC5countSivgTI"), "dynamically replaceable thunk for main.Widget.count.getter : Swift.Int");
+    assert_eq!(dm("_$s4main1SVTX"), "dynamically replaceable variable for main.S");
+    assert_eq!(dm("_$s4main1SVTx"), "dynamically replaceable key for main.S");
+    assert_eq!(dm("_$s4main1SVTI"), "dynamically replaceable thunk for main.S");
 }
 
 #[test]

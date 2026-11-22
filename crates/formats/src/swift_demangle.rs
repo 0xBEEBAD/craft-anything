@@ -1371,7 +1371,7 @@ impl<'a> D<'a> {
                     if matches!(self.stack.last(), Some(N::FirstMarker)) {
                         return Err("dynamically replaceable operand is a parser marker".into());
                     }
-                    if !matches!(self.stack.last(), Some(N::Global { .. } | N::Entity { .. })) {
+                    if !matches!(self.stack.last(), Some(N::Global { .. } | N::Entity { .. } | N::Nominal { .. })) {
                         return Err("dynamically replaceable operand is not a global or entity".into());
                     }
                 }
