@@ -375,7 +375,8 @@ impl<'a> D<'a> {
                 if d >= 36 {
                     return Err("bad punycode digit".into());
                 }
-                result = result.checked_add((d as u64) * w).ok_or("punycode overflow")?;
+                let product = (d as u64).checked_mul(w).ok_or("punycode overflow")?;
+                result = result.checked_add(product).ok_or("punycode overflow")?;
                 let t = t_val(j, bias) as u64;
                 if (d as u64) < t {
                     break;
@@ -388,7 +389,9 @@ impl<'a> D<'a> {
             let delta = result;
             let old_len = output.len();
             let new_pos = (pos_idx + 1) as i128 + delta as i128;
-            char_val = char_val.checked_add((new_pos / (old_len as i128 + 1)) as u32).ok_or("punycode code point out of range")?;
+            let quotient = new_pos / (old_len as i128 + 1);
+            let inc = u32::try_from(quotient).map_err(|_| "punycode code point out of range")?;
+            char_val = char_val.checked_add(inc).ok_or("punycode code point out of range")?;
             if char_val > 0x10FFFF {
                 return Err("punycode code point out of range".into());
             }

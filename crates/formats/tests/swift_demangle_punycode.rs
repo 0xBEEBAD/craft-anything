@@ -21,7 +21,7 @@ fn punycode_identifiers() {
 
 #[test]
 fn malformed_punycode_is_invalid() {
-    for s in ["_$s00", "_$s000", "_$s000abc_", "_$s005x"] {
+    for s in ["_$s00", "_$s000", "_$s000abc_", "_$s005x", "_$s0018JJJJJJJJJJJJJJJJJJ", "_$s009lAJACHBGa"] {
         assert_eq!(demangle(s).status, Status::Invalid, "{s}");
     }
 }
