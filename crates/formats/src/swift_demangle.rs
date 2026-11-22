@@ -1245,6 +1245,9 @@ impl<'a> D<'a> {
                     }
                     return self.push(N::Global { prefix: p.into(), inner: Box::new(conf), suffix: String::new() });
                 }
+                if p.starts_with("protocol self-conformance descriptor") && !matches!(self.stack.last(), Some(N::Nominal { kind: 'P', .. })) {
+                    return Err("protocol self-conformance descriptor of a non-protocol".into());
+                }
                 self.global(p)
             }
             b'N' => self.global("type metadata for"),
@@ -1366,6 +1369,26 @@ impl<'a> D<'a> {
                     b'v' => return self.outlined_variable(),
                     _ => return Err("unsupported thunk or specialization".into()),
                 };
+                if k == b'S'
+                    && matches!(
+                        self.stack.last(),
+                        Some(
+                            N::EmptyList
+                                | N::FirstMarker
+                                | N::Throws
+                                | N::Async
+                                | N::FnMarker(_)
+                                | N::Requirement(_)
+                                | N::Sig { .. }
+                                | N::Ident(_)
+                                | N::Private(_)
+                                | N::Operator(_)
+                                | N::Module(_)
+                        )
+                    )
+                {
+                    return Err("protocol self-conformance witness of a non-entity".into());
+                }
                 self.global(prefix)
             }
             b'W' => {
@@ -1388,6 +1411,9 @@ impl<'a> D<'a> {
                             return Err("witness operand is not a type".into());
                         }
                         let ty = self.pop_type()?;
+                        if !matches!(ty, N::Nominal { kind: 'P', .. }) {
+                            return Err("protocol self-conformance witness table for a non-protocol".into());
+                        }
                         self.push(N::Global { prefix: "protocol self-conformance witness table for".into(), inner: Box::new(ty), suffix: String::new() })
                     }
                     b'P' | b'p' | b'a' | b'G' => {

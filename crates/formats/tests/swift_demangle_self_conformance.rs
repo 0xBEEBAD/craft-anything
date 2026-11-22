@@ -44,4 +44,9 @@ fn malformed_operands_are_invalid() {
     invalid("_$ss5ErrorP5_codeSivgT");
     invalid("_$ss5ErrorP5_codeSivgTSx");
     invalid("_$s3Foo5ProtoPMSx");
+    invalid("_$ssMS");
+    invalid("_$sSiMS");
+    invalid("_$syTS");
+    invalid("_$s3FooTS");
+    invalid("_$sSiWS");
 }
