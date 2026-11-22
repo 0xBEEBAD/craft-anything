@@ -1627,7 +1627,7 @@ fn type_arg_allowed(n: &N) -> bool {
         N::Func { params, result, attrs } => {
             type_arg_allowed(params)
                 && type_arg_allowed(result)
-                && attrs.actor.as_ref().map_or(true, |a| type_arg_allowed(a))
+                && attrs.actor.as_ref().is_none_or(|a| type_arg_allowed(a))
                 && match &attrs.throws {
                     Throws::Typed(e) => type_arg_allowed(e),
                     _ => true,
