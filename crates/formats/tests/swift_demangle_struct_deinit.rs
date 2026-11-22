@@ -22,6 +22,8 @@ fn constructed_deinitializer_suffixes_decode() {
     assert_eq!(dm("_$s4main3BarOfD"), "main.Bar.deinit");
     assert_eq!(dm("_$s4main3BazPfD"), "main.Baz.deinit");
     assert_eq!(dm("_$s4main6WidgetCfD"), "main.Widget.__deallocating_deinit");
+    // Extension context: Swift selects `deinit` even for a class base.
+    assert_eq!(dm("_$s4main6WidgetC4mainEfD"), "main.Widget.deinit");
 }
 
 /// Malformed `fD` symbols are invalid.

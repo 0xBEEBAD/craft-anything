@@ -300,13 +300,9 @@ impl<'a> D<'a> {
     /// Is a context a class type, so that `fD` reads as `__deallocating_deinit`?
     /// Value types, protocols, metatypes and (extension) non-class bases read `deinit`.
     fn is_class_context(n: &N) -> bool {
-        match n {
-            N::Nominal { kind: 'C', .. } => true,
-            N::Bound { base, .. } => Self::is_class_context(base.as_ref()),
-            N::Extension { ty, .. } => Self::is_class_context(ty.as_ref()),
-            N::Entity { ctx, .. } => Self::is_class_context(ctx.as_ref()),
-            _ => false,
-        }
+        // Swift 6.1 accepts only an immediate Class nominal context; extension-wrapped,
+        // bound/generic and nested-entity contexts render `deinit`.
+        matches!(n, N::Nominal { kind: 'C', .. })
     }
 
     fn pop_name(&mut self) -> R<String> {
