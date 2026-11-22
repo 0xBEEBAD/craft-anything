@@ -31,7 +31,7 @@ fn constructed_distributed_symbols_decode() {
 /// Malformed operands are rejected instead of guessed.
 #[test]
 fn malformed_distributed_symbols_are_invalid() {
-    for symbol in ["_$s4main3fooyyFTE_", "_$s4main3fooyyFTY", "_$s4main3fooyyFTZ"] {
+    for symbol in ["_$s4main3fooyyFTE_", "_$s4main3fooyyFTY", "_$s4main3fooyyFTZ", "_$s4mainTE", "_$syTE", "_$sSiTE"] {
         assert_eq!(demangle(symbol).status, Status::Invalid, "{symbol}");
     }
 }
