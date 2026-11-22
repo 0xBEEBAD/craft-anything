@@ -1524,7 +1524,7 @@ impl<'a> D<'a> {
                 self.push(N::Metatype(Box::new(t)))
             }
             b'n' => {
-                let t = self.pop_type()?;
+                let t = self.witness_type()?;
                 self.push(N::Attributed { text: "__owned ", inner: Box::new(t), wrapped: true })
             }
             b'p' => {

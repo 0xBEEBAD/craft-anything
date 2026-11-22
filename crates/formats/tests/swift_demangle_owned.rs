@@ -29,4 +29,6 @@ fn a_constructed_owned_parameter_decodes() {
 #[test]
 fn non_type_operands_are_invalid() {
     invalid("_$s3Foo1fynF");
+    // metadata Global node is not a whole type
+    invalid("_$sSiNn");
 }
