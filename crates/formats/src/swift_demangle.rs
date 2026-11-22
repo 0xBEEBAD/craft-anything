@@ -1443,7 +1443,7 @@ impl<'a> D<'a> {
                 self.push(f)
             }
             b'd' => {
-                let t = self.pop_type()?;
+                let t = self.witness_type()?;
                 self.push(N::Variadic(Box::new(t)))
             }
             b'f' => {

@@ -39,7 +39,7 @@ fn constructed_variadic_types_decode() {
 
 #[test]
 fn malformed_variadic_operands_are_invalid() {
-    for symbol in ["_$s4main3fooydF", "_$s4main3foo1xySiydF", "_$s4main3fooWZ"] {
+    for symbol in ["_$s4main3fooydF", "_$s4main3foo1xySiydF", "_$s4main3fooWZ", "_$sSiNd"] {
         assert_eq!(demangle(symbol).status, Status::Invalid, "{symbol}");
     }
 }
