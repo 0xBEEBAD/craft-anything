@@ -297,6 +297,18 @@ impl<'a> D<'a> {
         }
     }
 
+    /// Is a context a class type, so that `fD` reads as `__deallocating_deinit`?
+    /// Value types, protocols, metatypes and (extension) non-class bases read `deinit`.
+    fn is_class_context(n: &N) -> bool {
+        match n {
+            N::Nominal { kind: 'C', .. } => true,
+            N::Bound { base, .. } => Self::is_class_context(base.as_ref()),
+            N::Extension { ty, .. } => Self::is_class_context(ty.as_ref()),
+            N::Entity { ctx, .. } => Self::is_class_context(ctx.as_ref()),
+            _ => false,
+        }
+    }
+
     fn pop_name(&mut self) -> R<String> {
         match self.pop()? {
             N::Ident(i) => Ok(i),
@@ -1442,7 +1454,7 @@ impl<'a> D<'a> {
             }
             b'f' => {
                 let k = self.next()?;
-                let kind = match k {
+                let mut kind = match k {
                     b'C' => EKind::AllocInit,
                     b'c' => EKind::Init,
                     b'D' => EKind::DeallocDeinit,
@@ -1499,6 +1511,9 @@ impl<'a> D<'a> {
                     }
                     _ => {
                         let ctx = self.pop_context()?;
+                        if matches!(kind, EKind::DeallocDeinit) && !Self::is_class_context(&ctx) {
+                            kind = EKind::Deinit;
+                        }
                         self.push(N::Entity { kind, ctx: Box::new(ctx), name: None, labels: Vec::new(), ty: None, accessor: None, is_static: false })
                     }
                 }
