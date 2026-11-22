@@ -1628,11 +1628,18 @@ fn weight(n: &N, depth: usize) -> usize {
 fn param_name(depth: u64, index: u64) -> String {
     let letter = u8::try_from(index % 26).map(|i| char::from(b'A' + i)).unwrap_or('A');
     let round = index / 26;
-    match (depth, round) {
-        (0, 0) => letter.to_string(),
-        (0, r) => format!("{letter}{r}"),
-        (d, _) => format!("{letter}{d}"),
-    }
+    // Swift names the first 26 generic parameters of a depth with the single
+    // letters A..Z. Further parameters add a second letter: the round's, so
+    // parameter 26 is AB, 27 is BB, ... Parameter 51 is AZ, 52 is BA, and
+    // so on. A non-zero depth (a generic parameter of an inner declaration)
+    // keeps its numeric suffix after the letters, e.g. AB1.
+    let base = if round == 0 {
+        letter.to_string()
+    } else {
+        let round_letter = u8::try_from(round).map(|r| char::from(b'A' + r)).unwrap_or('A');
+        format!("{letter}{round_letter}")
+    };
+    if depth == 0 { base } else { format!("{base}{depth}") }
 }
 
 fn path(n: &N, depth: usize) -> String {
@@ -1673,7 +1680,7 @@ fn params_text(p: &N, labels: &[Option<String>], depth: usize) -> String {
 
 fn sig_text(sig: &N, max_param: u64) -> String {
     let N::Sig { reqs } = sig else { return String::new() };
-    let params: Vec<String> = (0..=max_param.min(25)).map(|i| param_name(0, i)).collect();
+    let params: Vec<String> = (0..=max_param.min(1023)).map(|i| param_name(0, i)).collect();
     if reqs.is_empty() { format!("<{}>", params.join(", ")) } else { format!("<{} where {}>", params.join(", "), reqs.join(", ")) }
 }
 
