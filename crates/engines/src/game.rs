@@ -786,22 +786,23 @@ fn godot_installs(p: &Places) -> Vec<Installed> {
 
 /// Find the Windows editor in Steam's main folder or one of its configured libraries.
 fn steam_godot_installs(p: &Places) -> Vec<Installed> {
-    let mut roots: Vec<_> = p.steam_root.iter().cloned().chain(p.program_files.iter().map(|dir| dir.join("Steam"))).filter(|p| p.is_absolute()).collect();
-    roots.sort();
-    roots.dedup();
-    let mut libraries = std::collections::BTreeSet::new();
-    for root in roots {
-        libraries.extend(steam_library_paths(&root));
-        libraries.insert(root);
-    }
-    libraries
+    let roots: std::collections::BTreeSet<_> =
+        p.steam_root.iter().cloned().chain(p.program_files.iter().map(|dir| dir.join("Steam"))).filter(|p| p.is_absolute()).collect();
+    let mut editors = std::collections::BTreeSet::new();
+    roots
         .into_iter()
+        .flat_map(|root| {
+            let other_libraries = steam_library_paths(&root);
+            std::iter::once(root).chain(other_libraries)
+        })
         .filter_map(|library| {
             // Steam's Windows launch targets for Godot Engine (app 404790).
             let folder = library.join("steamapps/common/Godot Engine");
             let program =
                 ["godot.windows.opt.tools.64.exe", "godot.windows.opt.tools.32.exe"].into_iter().map(|exe| folder.join(exe)).find(|exe| exe.is_file())?;
-            Some(Installed { builder: Builder::Godot, version: String::new(), program })
+            // Steam's registry and library paths can spell the same location with different casing.
+            let identity = program.canonicalize().unwrap_or_else(|_| program.clone());
+            editors.insert(identity).then_some(Installed { builder: Builder::Godot, version: String::new(), program })
         })
         .collect()
 }
@@ -1399,6 +1400,9 @@ mod tests {
 
         touch(&steam, editor, b"");
         assert_eq!(inventory(&places).best(Builder::Godot).map(|i| i.program.clone()), Some(steam.join(editor)));
+        let registered = Places { steam_root: Some(steam.join("steamapps/..")), ..places.clone() };
+        let editors = inventory(&registered).engines.into_iter().filter(|i| i.builder == Builder::Godot).count();
+        assert_eq!(editors, 1, "the registry and Program Files can point to the same editor");
         std::fs::remove_file(steam.join(editor)).unwrap();
 
         let library_path = secondary.to_string_lossy().replace('\\', "\\\\");
@@ -1407,6 +1411,7 @@ mod tests {
             "steamapps/libraryfolders.vdf",
             format!("\"libraryfolders\"\n{{\n\t\"1\"\n\t{{\n\t\t\"path\"\t\t\"{library_path}\"\n\t}}\n}}\n").as_bytes(),
         );
+        let places = Places { steam_root: Some(steam), program_files: Vec::new(), ..places };
         let program = secondary.join(editor);
         std::fs::create_dir_all(&program).unwrap();
         assert!(!inventory(&places).ready(Builder::Godot));
