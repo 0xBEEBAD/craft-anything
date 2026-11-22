@@ -1504,7 +1504,7 @@ impl<'a> D<'a> {
                     _ => {
                         let ctx = match kind {
                             EKind::PropertyWrapperBackingInitializer | EKind::PropertyWrapperInitFromProjected => match self.pop()? {
-                                v @ N::Entity { kind: EKind::Var, .. } => v,
+                                v @ N::Entity { kind: EKind::Var, accessor: Some(_), .. } => v,
                                 _ => return Err("expected a variable".into()),
                             },
                             _ => self.pop_context()?,

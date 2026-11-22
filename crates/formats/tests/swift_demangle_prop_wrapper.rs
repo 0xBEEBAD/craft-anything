@@ -61,6 +61,8 @@ fn a_malformed_property_wrapper_operand_is_invalid() {
         "_$s3FoofP",
         "_$s3FoofW",
         "_$s3Foo3barfP",
+        "_$s3Foo3abcSSvfP",
+        "_$s3Foo3abcSSvfW",
     ] {
         assert_eq!(demangle(symbol).status, Status::Invalid, "{symbol}");
     }
