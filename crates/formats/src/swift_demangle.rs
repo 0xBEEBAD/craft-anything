@@ -1587,6 +1587,9 @@ impl<'a> D<'a> {
             b'y' => self.push(N::EmptyList),
             b'h' => {
                 let t = self.pop_type()?;
+                if matches!(t, N::Global { .. } | N::Entity { .. } | N::Conformance { .. } | N::Extension { .. }) {
+                    return Err("shared ownership of a non-type".into());
+                }
                 self.push(N::Attributed { text: "__shared ", inner: Box::new(t), wrapped: true })
             }
             b'z' => {

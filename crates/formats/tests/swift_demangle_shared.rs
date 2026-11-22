@@ -39,4 +39,7 @@ fn h_parameter_ownership_decodes_as_shared() {
 fn malformed_shared_is_invalid() {
     invalid("_$s3Foo3bar1xyhF");
     invalid("_$s3Foo3barF");
+    // `SiN` (type metadata for Swift.Int) is a Global, so `h` must not wrap it;
+    // swift-demangle leaves the symbol unchanged.
+    invalid("_$sSiNhMD");
 }
