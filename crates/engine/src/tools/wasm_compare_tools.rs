@@ -69,11 +69,15 @@ fn export_signature(r: &WasmReport, kind: &str, index: u32) -> String {
             .find(|f| f.index == index)
             .map(|f| f.signature.clone())
             .or_else(|| r.imports.iter().filter(|i| i.kind == "func").nth(index as usize).map(|i| i.signature.clone())),
-        "memory" => r
-            .memories
-            .iter()
-            .find(|m| m.index == index)
-            .map(|m| format!("{}..{}{}", m.initial, m.maximum.map(|x| x.to_string()).unwrap_or_default(), if m.shared { " shared" } else { "" })),
+        "memory" => r.memories.iter().find(|m| m.index == index).map(|m| {
+            format!(
+                "{}..{}{}{}",
+                m.initial,
+                m.maximum.map(|x| x.to_string()).unwrap_or_default(),
+                if m.shared { " shared" } else { "" },
+                if m.memory64 { " memory64" } else { "" },
+            )
+        }),
         "table" => r
             .tables
             .iter()
@@ -89,8 +93,24 @@ fn export_signature(r: &WasmReport, kind: &str, index: u32) -> String {
 fn interface(r: &WasmReport, scope: Scope) -> Interface {
     let mut m: Interface = BTreeMap::new();
     if scope != Scope::Exports {
+        // Memory and table imports have abbreviated display signatures. Resolve
+        // their complete types through their independent index spaces instead.
+        let (mut memory_index, mut table_index) = (0, 0);
         for i in &r.imports {
-            m.entry(("import", Some(i.module.clone()), i.name.clone())).or_default().push((i.kind.to_string(), i.signature.clone()));
+            let signature = match i.kind {
+                "memory" => {
+                    let signature = export_signature(r, i.kind, memory_index);
+                    memory_index += 1;
+                    signature
+                }
+                "table" => {
+                    let signature = export_signature(r, i.kind, table_index);
+                    table_index += 1;
+                    signature
+                }
+                _ => i.signature.clone(),
+            };
+            m.entry(("import", Some(i.module.clone()), i.name.clone())).or_default().push((i.kind.to_string(), signature));
         }
     }
     if scope != Scope::Imports {
@@ -396,5 +416,83 @@ mod tests {
 
         let bad = temp_file("bad.wasm", b"not wasm");
         call_err(&e, "formats_wasm_compare", json!({"left_path": l, "right_path": bad}));
+    }
+
+    // Hand-built core-module fixtures; no external module bytes are used.
+    fn resource_module(kind: u8, flags: u8, maximum: u8, imported: bool) -> Vec<u8> {
+        let mut module = b"\0asm\x01\0\0\0".to_vec();
+        let section = |id: u8, body: &[u8], bytes: &mut Vec<u8>| {
+            bytes.extend_from_slice(&[id, body.len() as u8]);
+            bytes.extend_from_slice(body);
+        };
+        let mut resource = Vec::new();
+        if kind == 1 {
+            resource.push(0x70);
+        }
+        resource.extend_from_slice(&[flags, 1, maximum]);
+        let mut body = vec![1];
+        if imported {
+            body.extend_from_slice(&[3, b'e', b'n', b'v', 1, b'r', kind]);
+        }
+        body.extend_from_slice(&resource);
+        section(
+            if imported {
+                2
+            } else if kind == 1 {
+                4
+            } else {
+                5
+            },
+            &body,
+            &mut module,
+        );
+        section(7, &[1, 1, b'r', kind, 0], &mut module);
+        module
+    }
+
+    #[test]
+    fn resource_type_changes_are_visible_in_imports_and_exports() {
+        let engine = Engine::new(crate::testing::session());
+        for (name, kind, left_flags, right_flags, left_max, right_max) in
+            [("memory maximum", 2, 1, 1, 2, 3), ("shared memory", 2, 1, 3, 2, 2), ("memory address width", 2, 1, 5, 2, 2), ("table maximum", 1, 1, 1, 2, 3)]
+        {
+            for imported in [false, true] {
+                let left = temp_file("left-resource.wasm", &resource_module(kind, left_flags, left_max, imported));
+                let right = temp_file("right-resource.wasm", &resource_module(kind, right_flags, right_max, imported));
+                for scope in if imported { &["imports", "exports"][..] } else { &["exports"][..] } {
+                    let result = call(&engine, "formats_wasm_compare", json!({"left_path": left, "right_path": right, "scope": scope}));
+                    assert_eq!(result["result"]["left"]["valid"], true, "{name}: {result}");
+                    assert_eq!(result["result"]["right"]["valid"], true, "{name}: {result}");
+                    assert_eq!(result["result"]["counts"]["changed"], 1, "{name}, imported={imported}, {scope}: {result}");
+                    let unchanged = call(&engine, "formats_wasm_compare", json!({"left_path": left, "right_path": left, "scope": scope}));
+                    assert_eq!(unchanged["result"]["counts"]["unchanged"], 1, "{name}, {scope}: {unchanged}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn resource_imports_use_independent_index_spaces() {
+        let module = |maximum: u8| {
+            let mut bytes = b"\0asm\x01\0\0\0".to_vec();
+            bytes.extend_from_slice(&[1, 4, 1, 0x60, 0, 0]);
+            let mut imports = vec![4];
+            for (name, kind, ty) in [(b'f', 0, vec![0]), (b'a', 2, vec![1, 1, 2]), (b't', 1, vec![0x70, 1, 1, 2]), (b'b', 2, vec![1, 1, maximum])] {
+                imports.extend_from_slice(&[3, b'e', b'n', b'v', 1, name, kind]);
+                imports.extend_from_slice(&ty);
+            }
+            bytes.extend_from_slice(&[2, imports.len() as u8]);
+            bytes.extend_from_slice(&imports);
+            bytes
+        };
+        let engine = Engine::new(crate::testing::session());
+        let left = temp_file("left-mixed-resources.wasm", &module(2));
+        let right = temp_file("right-mixed-resources.wasm", &module(3));
+        let result = call(&engine, "formats_wasm_compare", json!({"left_path": left, "right_path": right, "scope": "imports"}));
+        assert_eq!(result["result"]["left"]["valid"], true, "{result}");
+        assert_eq!(result["result"]["right"]["valid"], true, "{result}");
+        assert_eq!(result["result"]["counts"]["changed"], 1, "{result}");
+        assert_eq!(result["result"]["counts"]["unchanged"], 3, "{result}");
+        assert_eq!(result["result"]["changes"][0]["name"], "b", "{result}");
     }
 }
