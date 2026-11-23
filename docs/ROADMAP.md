@@ -122,7 +122,7 @@ cheapest help we can give anyone, so nothing below should hold it up for long.
       Not yet: #64 (its cause is fixed, its retries aren't: R5.3), #142 (R5.3), and #462, which says
       `none`, not #490's failure, and gives no version: ask for it
 - [x] Disable `StartupNotify` in the `.desktop` file so GNOME Wayland no longer kills the app
-      after 5–8 s (#1929). The trade-off is that GNOME shows no "starting" feedback while the app
+      after 5-8 s (#1929). The trade-off is that GNOME shows no "starting" feedback while the app
       opens.
 - [ ] Investigate why the app does not consume or clear the `XDG_ACTIVATION_TOKEN` that GNOME
       passes when `StartupNotify=true`, and re-enable launch feedback once fixed (#1929).
