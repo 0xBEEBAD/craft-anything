@@ -326,55 +326,87 @@ pub fn parse_params<T: DeserializeOwned>(v: Value) -> Result<T, ToolError> {
 /// nothing the schema doesn't describe is touched (#1825). A nested type is usually a `$ref` into
 /// the schema's own `$defs` or `definitions`, which is read through by the reference's own path.
 pub fn params_as_schema(schema: &Value, params: Value) -> Value {
-    typed_as_schema(schema, schema, &params, MAX_PARAM_DEPTH)
+    let mut walk = Walk::new();
+    typed_as_schema(schema, schema, &params, MAX_PARAM_DEPTH, &mut walk)
 }
 
 /// Params are trees the schema bounds, but a self-referencing schema would not end: past this
 /// depth a value is taken as written.
 const MAX_PARAM_DEPTH: usize = 64;
+/// A schema can repeat a branch through references without repeating it in the file. This bounds
+/// the whole walk, so nested alternatives cannot expand exponentially under the session lock.
+const MAX_SCHEMA_STEPS: usize = 10_000;
 
-fn typed_as_schema(schema: &Value, root: &Value, params: &Value, depth: usize) -> Value {
-    if depth == 0 {
+/// The work one call may spend walking a schema. When it runs out, the walk stops converting.
+struct Walk {
+    left: usize,
+}
+
+impl Walk {
+    fn new() -> Self {
+        Walk { left: MAX_SCHEMA_STEPS }
+    }
+
+    fn step(&mut self) -> bool {
+        if self.left == 0 {
+            return false;
+        }
+        self.left -= 1;
+        true
+    }
+}
+
+fn typed_as_schema(schema: &Value, root: &Value, params: &Value, depth: usize, walk: &mut Walk) -> Value {
+    if depth == 0 || !walk.step() {
         return params.clone();
     }
     if let Some(next) = resolve_ref(schema, root) {
-        return typed_as_schema(next, root, params, depth - 1);
+        return typed_as_schema(next, root, params, depth - 1, walk);
+    }
+    typed_from_schemas(&[schema], root, params, depth, walk)
+}
+
+/// A value described by every matching schema: the object's properties, the array's items, or all
+/// the kinds a leaf allows. Collecting every alternative before converting each leaf keeps the
+/// original text when any alternative allows it, whatever order the alternatives are in.
+fn typed_from_schemas(schemas: &[&Value], root: &Value, params: &Value, depth: usize, walk: &mut Walk) -> Value {
+    if depth == 0 || schemas.is_empty() || !walk.step() {
+        return params.clone();
     }
     match params {
-        Value::String(s) => written_as_schema(schema, root, s, params),
+        Value::String(text) => {
+            if schemas.iter().any(|schema| allows_string(schema, root, 0, walk)) {
+                return params.clone();
+            }
+            written_as_schema(schemas, root, text, params, walk)
+        }
         Value::Object(map) => Value::Object(
             map.iter()
                 .map(|(key, value)| {
-                    let mut schemas = Vec::new();
-                    property_schemas(root, schema, key, &mut schemas, 0);
-                    (key.clone(), typed_from_schemas(&schemas, root, value, depth))
+                    let mut child = Vec::new();
+                    for schema in schemas {
+                        property_schemas(root, schema, key, &mut child, 0, walk);
+                    }
+                    (key.clone(), typed_from_schemas(&child, root, value, depth - 1, walk))
                 })
                 .collect(),
         ),
         Value::Array(items) => {
-            let mut schemas = Vec::new();
-            item_schemas(root, schema, &mut schemas, 0);
-            Value::Array(items.iter().map(|item| typed_from_schemas(&schemas, root, item, depth)).collect())
+            let mut child = Vec::new();
+            for schema in schemas {
+                item_schemas(root, schema, &mut child, 0, walk);
+            }
+            Value::Array(items.iter().map(|item| typed_from_schemas(&child, root, item, depth - 1, walk)).collect())
         }
         _ => params.clone(),
     }
 }
 
-/// A value described by several schemas (an `anyOf`/`oneOf` alternative): convert with each of
-/// them, in turn, unless any schema also allows text. Text a schema also allows may be meant as a
-/// string, so it is left exactly as sent.
-fn typed_from_schemas(schemas: &[&Value], root: &Value, params: &Value, depth: usize) -> Value {
-    if schemas.is_empty() || schemas.iter().any(|schema| allows_string(schema, root, 0)) {
-        return params.clone();
-    }
-    schemas.iter().fold(params.clone(), |value, schema| typed_as_schema(schema, root, &value, depth - 1))
-}
-
 /// The schemas that describe `key` in `schema`: its own `properties`, then object alternatives in
 /// `anyOf`/`oneOf`, following local references. This is how an `Option<Struct>` field's schema
 /// (`anyOf: [$ref, null]`) keeps the numbers inside the struct.
-fn property_schemas<'a>(root: &'a Value, schema: &'a Value, key: &str, out: &mut Vec<&'a Value>, depth: usize) {
-    if depth >= MAX_PARAM_DEPTH {
+fn property_schemas<'a>(root: &'a Value, schema: &'a Value, key: &str, out: &mut Vec<&'a Value>, depth: usize, walk: &mut Walk) {
+    if depth >= MAX_PARAM_DEPTH || !walk.step() {
         return;
     }
     let schema = resolve_ref(schema, root).unwrap_or(schema);
@@ -384,7 +416,7 @@ fn property_schemas<'a>(root: &'a Value, schema: &'a Value, key: &str, out: &mut
     for alternatives in ["anyOf", "oneOf"] {
         if let Some(branches) = schema.get(alternatives).and_then(Value::as_array) {
             for branch in branches {
-                property_schemas(root, branch, key, out, depth + 1);
+                property_schemas(root, branch, key, out, depth + 1, walk);
             }
         }
     }
@@ -392,8 +424,8 @@ fn property_schemas<'a>(root: &'a Value, schema: &'a Value, key: &str, out: &mut
 
 /// The item schemas of `schema`: its own `items`, then array alternatives in `anyOf`/`oneOf`,
 /// following local references.
-fn item_schemas<'a>(root: &'a Value, schema: &'a Value, out: &mut Vec<&'a Value>, depth: usize) {
-    if depth >= MAX_PARAM_DEPTH {
+fn item_schemas<'a>(root: &'a Value, schema: &'a Value, out: &mut Vec<&'a Value>, depth: usize, walk: &mut Walk) {
+    if depth >= MAX_PARAM_DEPTH || !walk.step() {
         return;
     }
     let schema = resolve_ref(schema, root).unwrap_or(schema);
@@ -403,7 +435,7 @@ fn item_schemas<'a>(root: &'a Value, schema: &'a Value, out: &mut Vec<&'a Value>
     for alternatives in ["anyOf", "oneOf"] {
         if let Some(branches) = schema.get(alternatives).and_then(Value::as_array) {
             for branch in branches {
-                item_schemas(root, branch, out, depth + 1);
+                item_schemas(root, branch, out, depth + 1, walk);
             }
         }
     }
@@ -425,9 +457,11 @@ fn resolve_ref<'a>(schema: &'a Value, root: &'a Value) -> Option<&'a Value> {
 /// an integer, number or boolean the text spells exactly is read as one. Text that reads as a
 /// float for an integer field, or is too large for the type, stays as written, so the normal
 /// refusal still describes what the caller sent.
-fn written_as_schema(schema: &Value, root: &Value, text: &str, params: &Value) -> Value {
+fn written_as_schema(schemas: &[&Value], root: &Value, text: &str, params: &Value, walk: &mut Walk) -> Value {
     let mut kinds = Vec::new();
-    schema_kinds(schema, root, 0, &mut kinds);
+    for schema in schemas {
+        schema_kinds(schema, root, 0, &mut kinds, walk);
+    }
     if kinds.contains(&"string") {
         return params.clone();
     }
@@ -455,8 +489,8 @@ fn written_as_schema(schema: &Value, root: &Value, text: &str, params: &Value) -
 
 /// Every type a schema allows, whether written as one word or a list, through local references
 /// and `anyOf`/`oneOf` alternatives.
-fn schema_kinds<'a>(schema: &'a Value, root: &'a Value, depth: usize, out: &mut Vec<&'a str>) {
-    if depth >= MAX_PARAM_DEPTH {
+fn schema_kinds<'a>(schema: &'a Value, root: &'a Value, depth: usize, out: &mut Vec<&'a str>, walk: &mut Walk) {
+    if depth >= MAX_PARAM_DEPTH || !walk.step() {
         return;
     }
     let schema = resolve_ref(schema, root).unwrap_or(schema);
@@ -468,27 +502,37 @@ fn schema_kinds<'a>(schema: &'a Value, root: &'a Value, depth: usize, out: &mut 
     for alternatives in ["anyOf", "oneOf"] {
         if let Some(branches) = schema.get(alternatives).and_then(Value::as_array) {
             for branch in branches {
-                schema_kinds(branch, root, depth + 1, out);
+                schema_kinds(branch, root, depth + 1, out, walk);
             }
         }
     }
 }
 
 /// Whether a schema allows text anywhere, through local references and alternatives. Text a
-/// schema allows is never rewritten, even when it also allows a number.
-fn allows_string(schema: &Value, root: &Value, depth: usize) -> bool {
-    if depth >= MAX_PARAM_DEPTH {
-        return false;
+/// schema allows is never rewritten, even when it also allows a number. A schema with no `type`
+/// and no alternatives accepts any value, text included.
+fn allows_string(schema: &Value, root: &Value, depth: usize, walk: &mut Walk) -> bool {
+    if depth >= MAX_PARAM_DEPTH || !walk.step() {
+        return true;
     }
     let schema = resolve_ref(schema, root).unwrap_or(schema);
-    let own = match schema.get("type") {
+    let typed = schema.get("type");
+    let own = match typed {
         Some(Value::String(kind)) => kind == "string",
         Some(Value::Array(kinds)) => kinds.iter().any(|kind| kind.as_str() == Some("string")),
         _ => false,
     };
-    own || ["anyOf", "oneOf"].iter().any(|alternatives| {
-        schema.get(*alternatives).and_then(Value::as_array).is_some_and(|branches| branches.iter().any(|branch| allows_string(branch, root, depth + 1)))
-    })
+    if own {
+        return true;
+    }
+    let alternatives = ["anyOf", "oneOf"];
+    if alternatives.iter().any(|key| {
+        schema.get(*key).and_then(Value::as_array).is_some_and(|branches| branches.iter().any(|branch| allows_string(branch, root, depth + 1, walk)))
+    }) {
+        return true;
+    }
+    // No `type`: the schema permits any JSON value, including text.
+    typed.is_none()
 }
 
 /// A JSON Pointer to the rejected value, without guessing when Serde cannot locate it.
@@ -636,6 +680,49 @@ mod parameter_tests {
         }});
         let typed = params_as_schema(&schema, json!({"range": {"offset": "0"}, "windows": [{"start": "8"}], "label": {"text": "200"}}));
         assert_eq!(typed, json!({"range": {"offset": 0}, "windows": [{"start": 8}], "label": {"text": "200"}}));
+    }
+
+    #[test]
+    fn alternatives_are_collected_before_each_leaf_is_converted() {
+        // The same field in two object alternatives: a string in either one keeps the text,
+        // whatever order the alternatives are in.
+        for branches in [
+            json!([
+                {"type": "object", "properties": {"payload": {"type": "object", "properties": {"value": {"type": "integer"}}}}},
+                {"type": "object", "properties": {"payload": {"type": "object", "properties": {"value": {"type": "string"}}}}}
+            ]),
+            json!([
+                {"type": "object", "properties": {"payload": {"type": "object", "properties": {"value": {"type": "string"}}}}},
+                {"type": "object", "properties": {"payload": {"type": "object", "properties": {"value": {"type": "integer"}}}}}
+            ]),
+        ] {
+            let schema = json!({"anyOf": branches});
+            assert_eq!(params_as_schema(&schema, json!({"payload": {"value": "200"}})), json!({"payload": {"value": "200"}}));
+        }
+
+        // A string alternative does not stop an object value from having its own fields read.
+        let schema = json!({"anyOf": [
+            {"type": "string"},
+            {"type": "object", "properties": {"count": {"type": "integer"}}}
+        ]});
+        assert_eq!(params_as_schema(&schema, json!({"count": "5"})), json!({"count": 5}));
+
+        // An alternative without a type accepts any value, text included.
+        let schema = json!({"anyOf": [{"type": "integer"}, {}]});
+        assert_eq!(params_as_schema(&schema, json!("200")), json!("200"));
+    }
+
+    #[test]
+    fn repeated_schema_branches_stop_at_the_work_limit() {
+        let mut defs = serde_json::Map::new();
+        defs.insert("N0".into(), json!({"type": "integer"}));
+        for level in 1..=30 {
+            let previous = format!("#/$defs/N{}", level - 1);
+            defs.insert(format!("N{level}"), json!({"anyOf": [{"$ref": previous.clone()}, {"$ref": previous}]}));
+        }
+        let schema = json!({"type": "object", "properties": {"n": {"$ref": "#/$defs/N30"}}, "$defs": defs});
+        // Without the walk bound this takes about 2^30 steps. With it, the text is left as sent.
+        assert_eq!(params_as_schema(&schema, json!({"n": "200"})), json!({"n": "200"}));
     }
 
     #[test]
