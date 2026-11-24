@@ -3841,6 +3841,9 @@ Owner: open · Status: in progress
 - [x] Decode Swift associated conformance descriptors (`Tn`): print `associated conformance descriptor for <declaring>.<assoc path>: <conforming>`, consuming multi-segment associated-type paths.
       — claimed: Chr0mium24, branch bugfix/r3.12-swift-demangle-assoc-conf-desc
 
+- [x] `Tx`, `TX` and `TI` suffixes now print `dynamically replaceable key/variable/thunk for` the entity before them, as `swift-demangle` does. For example `_$s16CoreHapticsTools8CHTEventC4timeSo9NSDecimalavsTx` reads `dynamically replaceable key for CoreHapticsTools.CHTEvent.time.setter : __C.NSDecimal` instead of invalid.
+      — claimed: Chr0mium24, branch bugfix/r3.12-swift-demangle-dyn-replace
+
 ### R3.13 Web inspection correctness
 Owner: open · Status: in progress
 - [x] Decode character references in HTML page titles before returning their displayed text.
