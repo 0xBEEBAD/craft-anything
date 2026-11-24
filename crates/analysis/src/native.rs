@@ -245,7 +245,8 @@ fn triage_hints(bin: &Binary, data: &[u8], file_name: &str, hints: &[Hint], dart
     if has("flutter") && dart_path.is_none() {
         if matches!(os, "Windows" | "Mac") || (os == "Linux" && bin.kind == "executable") {
             toolsets.push("formats");
-            tools.insert(0, ("app_folder_explain", "inspect the app's install folder or macOS bundle for its Flutter engine and assets"));
+            tools
+                .insert(0, ("app_folder_explain", "pass the absolute path of the install folder or macOS app bundle to inspect its Flutter engine and assets"));
         } else {
             toolsets.push("android");
             tools.insert(0, ("android_flutter_identify", "Flutter apps keep their Dart code in a snapshot (libapp.so)"));
