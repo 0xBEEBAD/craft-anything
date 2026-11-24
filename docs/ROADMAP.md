@@ -764,9 +764,9 @@ Owner: open · Status: todo
 - [x] A saved fal.ai key reaches an API-key build's asset tools; every call said "No fal.ai key"
       (#923). Outside a project the tools now say that instead. Not checked with a real fal.ai key
       or API build
-- [ ] fal.ai's paid generation POST reports a timeout or interrupted call as "Couldn't reach
-      fal.ai" and invites a retry, although the generation may already be running and billed. Say
-      so, point at the dashboard, and don't retry it
+- [x] fal.ai's paid generation POST reported a timeout or interrupted call as "Couldn't reach
+      fal.ai" and invited a retry, although the generation may already be running and billed. It
+      now says so, points at the dashboard, and isn't retried
       — claimed: AlexJoaquimPereira, branch bugfix/r5.5-fal-generation-timeout
 - [x] Each build has an engine of its own: sharing the app's session, whose `attach` points
       at whichever project started last, sent a build's files and asset spending to the wrong project

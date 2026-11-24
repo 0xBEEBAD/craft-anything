@@ -90,10 +90,7 @@ impl Fal {
             .header("Authorization", &format!("Key {key}"))
             .header("Content-Type", "application/json")
             .send(body.to_string())
-            .map_err(|e| {
-                ToolError::new(ErrorCode::EngineMissing, format!("Couldn't reach fal.ai: {e}"))
-                    .with_remediation("Check your internet connection and try again.")
-            })?;
+            .map_err(Fal::post_error)?;
         let status = resp.status().as_u16();
         let text = resp.into_body().read_to_string().unwrap_or_default();
         match status {
@@ -103,6 +100,26 @@ impl Fal {
             402 => Err(ToolError::new(ErrorCode::OverLimit, "The fal.ai account is out of credit.").with_remediation("Add credit at fal.ai, then try again.")),
             _ => Err(ToolError::new(ErrorCode::EngineMissing, format!("fal.ai answered {status}: {}", text.chars().take(300).collect::<String>()))),
         }
+    }
+
+    /// The failure of one paid generation POST. A generation can start before fal answers, so a
+    /// timeout or a signal that cuts the call short may already have been billed: say so, and don't
+    /// invite a second charge.
+    fn post_error(e: ureq::Error) -> ToolError {
+        if matches!(&e, ureq::Error::Timeout(ureq::Timeout::RecvResponse | ureq::Timeout::RecvBody | ureq::Timeout::SendBody)) {
+            let mut err = ToolError::new(ErrorCode::TimedOut, "fal.ai didn't answer in time; the generation may already be running and billed.")
+                .with_remediation("Check the generation in the fal.ai dashboard before trying again: sending it again may charge you twice.");
+            err.retryable = false;
+            return err;
+        }
+        if matches!(&e, ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::Interrupted) {
+            return ToolError::new(
+                ErrorCode::ProgramFailed,
+                format!("The call to fal.ai was interrupted before it answered: {e}. The generation may already be running and billed."),
+            )
+            .with_remediation("Check the generation in the fal.ai dashboard before trying again: sending it again may charge you twice.");
+        }
+        ToolError::new(ErrorCode::EngineMissing, format!("Couldn't reach fal.ai: {e}")).with_remediation("Check your internet connection and try again.")
     }
 }
 
@@ -275,6 +292,30 @@ mod tests {
         assert_eq!(model_url(&fbx_only), None);
         let glb_mesh = json!({"model_mesh": {"url": "https://x/m.glb", "file_name": "m.glb"}});
         assert_eq!(model_url(&glb_mesh).as_deref(), Some("https://x/m.glb"));
+    }
+
+    /// A generation is paid as soon as fal takes the POST: a timeout or a signal that cuts the call
+    /// short doesn't mean nothing ran, so the error must not invite a second charge.
+    #[test]
+    fn a_slow_or_interrupted_generation_is_not_told_to_try_again() {
+        let slow = Fal::post_error(ureq::Error::Timeout(ureq::Timeout::RecvResponse));
+        assert_eq!((slow.code, slow.retryable), (ErrorCode::TimedOut, false), "{slow:?}");
+        assert!(slow.message.contains("may already be running"), "{slow:?}");
+        assert!(slow.remediation.as_deref().is_some_and(|r| r.contains("dashboard") && r.contains("twice")), "{slow:?}");
+
+        let interrupted = Fal::post_error(ureq::Error::Io(std::io::Error::from(std::io::ErrorKind::Interrupted)));
+        assert_eq!((interrupted.code, interrupted.retryable), (ErrorCode::ProgramFailed, false), "{interrupted:?}");
+        assert!(interrupted.message.contains("interrupted") && interrupted.message.contains("may already be running"), "{interrupted:?}");
+        assert!(interrupted.remediation.as_deref().is_some_and(|r| r.contains("dashboard")), "{interrupted:?}");
+
+        // Opening the connection timed out: nothing was sent, so this stays a connection problem.
+        let connect = Fal::post_error(ureq::Error::Timeout(ureq::Timeout::Connect));
+        assert_eq!(connect.code, ErrorCode::EngineMissing, "{connect:?}");
+        assert!(connect.message.starts_with("Couldn't reach fal.ai"), "{connect:?}");
+
+        let refused = Fal::post_error(ureq::Error::ConnectionFailed);
+        assert_eq!(refused.code, ErrorCode::EngineMissing, "{refused:?}");
+        assert!(refused.message.starts_with("Couldn't reach fal.ai"), "{refused:?}");
     }
 
     #[test]
