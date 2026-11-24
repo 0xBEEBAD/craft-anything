@@ -3787,6 +3787,14 @@ Owner: open · Status: in progress
 - [x] Swift variadic parameters decode their trailing `...` on the type instead of `unsupported operator 'd'`, e.g. `_$s6CoreML8MLTensorV3all9alongAxes8keepRankACSid_SbtF` now reads `CoreML.MLTensor.all(alongAxes: Swift.Int..., keepRank: Swift.Bool) -> CoreML.MLTensor`.
       — claimed: Chr0mium24, branch bugfix/r3.12-swift-demangle-variadic
 
+- [x] Swift function parameters with `__shared` ownership decode. The `h` operator was reported
+      as an "unsupported operator", so `init(exactly: __shared ...)` parameters and any function
+      type using a `__shared` parameter failed; they now read `__shared` before the parameter type,
+      as `swift-demangle` prints them. For example
+      `_$s10Foundation12CharacterSetV12charactersInACSSh_tcfC` reads
+      "Foundation.CharacterSet.init(charactersIn: __shared Swift.String) -> Foundation.CharacterSet".
+      — claimed: Chr0mium24, branch bugfix/r3.12-swift-demangle-shared
+
 ### R3.13 Web inspection correctness
 Owner: open · Status: in progress
 - [x] Decode character references in HTML page titles before returning their displayed text.
