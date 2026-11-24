@@ -3775,6 +3775,9 @@ Owner: open · Status: in progress
       prints `Foundation.NSUTF8StringEncoding.getter : (extension in Foundation):Swift.String.Encoding`.
       — claimed: Chr0mium24, branch bugfix/r3.12-swift-demangle-extension-prefix
 
+- [x] `MQ` on an opaque return type decodes as the opaque type descriptor of that declaration (for example `_$s12FinanceKitUI16OrderPaymentViewV4bodyQrvpQOMQ`).
+      — claimed: Chr0mium24, branch bugfix/r3.12-swift-demangle-opaque-type-desc
+
 ### R3.13 Web inspection correctness
 Owner: open · Status: in progress
 - [x] Decode character references in HTML page titles before returning their displayed text.
