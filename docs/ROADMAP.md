@@ -3784,6 +3784,9 @@ Owner: open · Status: in progress
 - [x] Swift generic parameters at depth > 0 (`qd__`, `qd_0_` …) now decode as `A1`, `B1` instead of `expected an index`, both as types and in generic requirements, reading the depth and the parameter index; other depths and other generic-parameter forms stay invalid. Example symbol `_$sSz18truncatingIfNeededxqd___tcSzRd__lufCTj` now prints `dispatch thunk of Swift.BinaryInteger.init<A where A1: Swift.BinaryInteger>(truncatingIfNeeded: A1) -> A`.
       — claimed: Chr0mium24, branch bugfix/r3.12-swift-demangle-deep-generics
 
+- [x] Swift variadic parameters decode their trailing `...` on the type instead of `unsupported operator 'd'`, e.g. `_$s6CoreML8MLTensorV3all9alongAxes8keepRankACSid_SbtF` now reads `CoreML.MLTensor.all(alongAxes: Swift.Int..., keepRank: Swift.Bool) -> CoreML.MLTensor`.
+      — claimed: Chr0mium24, branch bugfix/r3.12-swift-demangle-variadic
+
 ### R3.13 Web inspection correctness
 Owner: open · Status: in progress
 - [x] Decode character references in HTML page titles before returning their displayed text.
