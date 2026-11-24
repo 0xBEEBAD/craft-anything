@@ -147,7 +147,7 @@ fn desktop_candidate(program: &str) -> Option<PathBuf> {
 /// has that name; an error when only the Claude desktop app does.
 fn usual_program_with_desktop(usual: &str, search: Option<std::ffi::OsString>, desktop: Option<PathBuf>) -> Result<Option<String>, ToolError> {
     let first = craft_anything_platform::which::which_in(usual, search.clone()).into_iter().next();
-    match (first, find_program_with_desktop(usual, search, desktop, OPENCODE_PROBE_TIMEOUT)) {
+    match (first, find_program_with_desktop(usual, search, desktop, OPENCODE_PROBE_BUDGET)) {
         (None, chosen) => Ok(chosen.map(|cli| cli.display().to_string())),
         (Some(first), Some(real)) => Ok(Some(if first == real { usual.to_string() } else { real.display().to_string() })),
         (Some(app), None) => Err(desktop_app_error(&app)),
@@ -167,13 +167,13 @@ fn desktop_app_error(app: &Path) -> ToolError {
 /// the desktop app). Detection, the desktop app hint and starting a run all look through this, so
 /// what's offered is what runs.
 pub fn find_program(program: &str) -> Option<PathBuf> {
-    find_program_within(program, OPENCODE_PROBE_TIMEOUT)
+    find_program_within(program, OPENCODE_PROBE_BUDGET)
 }
 
-/// [`find_program`] with a caller-supplied timeout for multi-candidate OpenCode version probes
-/// (used by [`crate::detect`] so a slow probe fits inside the discovery budget).
-pub(crate) fn find_program_within(program: &str, probe_timeout: Duration) -> Option<PathBuf> {
-    find_program_with_desktop(program, craft_anything_platform::which::search_path(), desktop_candidate(program), probe_timeout)
+/// [`find_program`] with a caller-supplied total budget for multi-candidate OpenCode version
+/// probes (used by [`crate::detect`] so multi-candidate probes fit inside the discovery budget).
+pub(crate) fn find_program_within(program: &str, probe_budget: Duration) -> Option<PathBuf> {
+    find_program_with_desktop(program, craft_anything_platform::which::search_path(), desktop_candidate(program), probe_budget)
 }
 
 /// Off-PATH desktop CLI locations stay here, not in backend tests or command selection.
@@ -226,6 +226,8 @@ fn desktop_cli(program: &str, local_data: Option<&Path>) -> Option<PathBuf> {
 
 /// Default per-candidate timeout for multi-candidate OpenCode version probes.
 const OPENCODE_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+/// Default total budget across all candidates for multi-candidate OpenCode version probes.
+const OPENCODE_PROBE_BUDGET: Duration = Duration::from_secs(4);
 /// Upper bound on cached OpenCode candidate probe entries.
 const OPENCODE_PROBE_CACHE_CAP: usize = 64;
 
@@ -259,25 +261,37 @@ fn candidate_key(path: &Path) -> PathBuf {
 /// Search `path` for `program` without consulting off-PATH desktop app folders.
 #[cfg(test)]
 fn find_program_in(program: &str, path: Option<std::ffi::OsString>) -> Option<PathBuf> {
-    find_program_with_desktop(program, path, None, OPENCODE_PROBE_TIMEOUT)
+    find_program_with_desktop(program, path, None, OPENCODE_PROBE_BUDGET)
+}
+
+/// Collect deduplicated OpenCode candidates across `path` (expanding `PATHEXT` via `"opencode"`
+/// even when the caller saved an extensioned bare name like `opencode.cmd`) plus any off-PATH
+/// desktop CLI.
+fn opencode_candidates(program: &str, path: Option<std::ffi::OsString>, desktop: Option<PathBuf>) -> Vec<PathBuf> {
+    let mut matches = craft_anything_platform::which::which_in(program, path.clone());
+    if Path::new(program).extension().is_some() {
+        matches.extend(craft_anything_platform::which::which_in("opencode", path));
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut candidates = Vec::new();
+    for candidate in matches.into_iter().chain(desktop) {
+        if seen.insert(candidate_key(&candidate)) {
+            candidates.push(candidate);
+        }
+    }
+    candidates
 }
 
 /// Search `path` and an optional off-PATH `desktop` CLI for `program`, filtering out the Claude
 /// desktop app and preferring an OpenCode 2 installation over OpenCode 1.x (#1111).
-fn find_program_with_desktop(program: &str, path: Option<std::ffi::OsString>, desktop: Option<PathBuf>, probe_timeout: Duration) -> Option<PathBuf> {
-    let matches = craft_anything_platform::which::which_in(program, path);
+fn find_program_with_desktop(program: &str, path: Option<std::ffi::OsString>, desktop: Option<PathBuf>, probe_budget: Duration) -> Option<PathBuf> {
     let bare = Path::new(program).parent().is_none_or(|p| p.as_os_str().is_empty());
     let desktop = bare.then_some(desktop).flatten();
     if is_opencode_name(program) {
-        let mut seen = std::collections::HashSet::new();
-        let mut candidates = Vec::new();
-        for candidate in matches.into_iter().chain(desktop) {
-            if seen.insert(candidate_key(&candidate)) {
-                candidates.push(candidate);
-            }
-        }
-        return pick_opencode_candidate(candidates, probe_timeout);
+        let candidates = opencode_candidates(program, path, desktop);
+        return pick_opencode_candidate(candidates, probe_budget);
     }
+    let matches = craft_anything_platform::which::which_in(program, path);
     matches.into_iter().find(|p| program != "claude" || !leads_to_claude_desktop(p)).or(desktop)
 }
 
@@ -321,20 +335,37 @@ fn probe_opencode_v2(candidate: &Path, timeout: Duration) -> Option<bool> {
     result
 }
 
-/// Choose an OpenCode 2 binary from `candidates` when more than one distinct installation exists
-/// (#1111).
+/// Choose an OpenCode 2 binary from `candidates` when more than one distinct installation exists,
+/// bounded by `total_budget` across the entire loop (#1111).
 ///
 /// With a single candidate, return it directly without spawning a probe: the turn's own
 /// `required_flags` check will run it or report the OpenCode 1.x refusal. With multiple candidates,
-/// pick the first whose `run --help` lists `--format` and `--standalone`; if none confirm 2.x,
-/// keep the first candidate in search order so a leading 1.x still triggers the dedicated 1.x
-/// refusal and a leading broken launcher still reports its own failure.
-fn pick_opencode_candidate(candidates: Vec<PathBuf>, probe_timeout: Duration) -> Option<PathBuf> {
+/// pick the first whose `run --help` lists `--format` and `--standalone` before `total_budget`
+/// expires; if none confirm 2.x (or the budget runs out), keep the first candidate in search order
+/// so a leading 1.x still triggers the dedicated 1.x refusal and a leading broken launcher still
+/// reports its own failure.
+fn pick_opencode_candidate(candidates: Vec<PathBuf>, total_budget: Duration) -> Option<PathBuf> {
+    pick_opencode_candidate_with(candidates, total_budget, std::time::Instant::now, probe_opencode_v2)
+}
+
+fn pick_opencode_candidate_with(
+    candidates: Vec<PathBuf>,
+    total_budget: Duration,
+    mut now: impl FnMut() -> std::time::Instant,
+    mut probe: impl FnMut(&Path, Duration) -> Option<bool>,
+) -> Option<PathBuf> {
     if candidates.len() <= 1 {
         return candidates.into_iter().next();
     }
+    let deadline = now() + total_budget;
     for candidate in &candidates {
-        if probe_opencode_v2(candidate, probe_timeout) == Some(true) {
+        let Some(remaining) = deadline.checked_duration_since(now()) else {
+            break;
+        };
+        if remaining.is_zero() {
+            break;
+        }
+        if probe(candidate, remaining.min(OPENCODE_PROBE_TIMEOUT)) == Some(true) {
             return Some(candidate.clone());
         }
     }
@@ -1933,6 +1964,88 @@ mod tests {
         assert_eq!(find_program_in("opencode", path(&[&inc_dir, &v1_dir])), Some(inc.clone()));
         assert_eq!(find_program_in("opencode", path(&[&inc_dir, &v1_dir])), Some(inc));
         assert_eq!(std::fs::read_to_string(&inc_log).unwrap_or_default().lines().count(), 2, "inconclusive probes must not be cached");
+
+        // Extensioned bare OpenCode names (e.g. saved `opencode.cmd` on Windows) still expand
+        // across PATHEXT so a later `opencode.exe` or `opencode.bat` v2 installation is found.
+        if cfg!(windows) {
+            let cmd_v1_dir = d.path().join("ext-cmd-v1");
+            let bat_v2_dir = d.path().join("ext-bat-v2");
+            let exe_v2_dir = d.path().join("ext-exe-v2");
+            std::fs::create_dir_all(&cmd_v1_dir).unwrap();
+            std::fs::create_dir_all(&bat_v2_dir).unwrap();
+            std::fs::create_dir_all(&exe_v2_dir).unwrap();
+            let cmd_v1 = cmd_v1_dir.join("opencode.cmd");
+            let bat_v2 = bat_v2_dir.join("opencode.bat");
+            let exe_v2 = exe_v2_dir.join("opencode.exe");
+            std::fs::write(&cmd_v1, "@echo off\r\necho Usage: opencode run --format --title\r\nexit /b 0\r\n").unwrap();
+            std::fs::write(&bat_v2, "@echo off\r\necho Usage: opencode run --format --standalone\r\nexit /b 0\r\n").unwrap();
+            std::fs::write(&exe_v2, b"").unwrap();
+            let saved_cmd = BackendOptions { command: Some("opencode.cmd".into()), ..Default::default() };
+            assert_eq!(
+                program_in_with_desktop(&opencode, &saved_cmd, path(&[&cmd_v1_dir, &bat_v2_dir]), no_desktop).unwrap(),
+                bat_v2.display().to_string(),
+                "saved opencode.cmd expands PATHEXT to find v2 under another extension"
+            );
+            let collected = opencode_candidates("opencode.cmd", path(&[&cmd_v1_dir, &exe_v2_dir]), None);
+            assert_eq!(collected, vec![cmd_v1.clone(), exe_v2.clone()], "saved opencode.cmd collects later opencode.exe");
+            let picked = pick_opencode_candidate_with(collected, OPENCODE_PROBE_BUDGET, std::time::Instant::now, |p, _| Some(p == exe_v2));
+            assert_eq!(picked, Some(exe_v2), "saved opencode.cmd picks v2 opencode.exe");
+        }
+    }
+
+    /// #1111: multi-candidate OpenCode probing enforces a shared total budget across candidates
+    /// (passing only the remaining time to each probe) so discovery stays inside `detect_all`'s
+    /// 1.5 s window and falls back to the first candidate in search order when the budget runs out.
+    #[test]
+    fn opencode_candidate_probing_enforces_shared_total_budget() {
+        use std::cell::Cell;
+        let t0 = std::time::Instant::now();
+        let clock = Cell::new(t0);
+        let c1 = PathBuf::from("v1/opencode");
+        let c2 = PathBuf::from("v2-slow/opencode");
+        let c3 = PathBuf::from("v2-unreached/opencode");
+
+        // Budget 900 ms: c1 spends 800 ms (v1), c2 gets only 100 ms remaining and times out, c3
+        // is never probed, and selection falls back to c1 (search order).
+        let mut seen_timeouts = Vec::new();
+        let picked = pick_opencode_candidate_with(
+            vec![c1.clone(), c2.clone(), c3.clone()],
+            Duration::from_millis(900),
+            || clock.get(),
+            |cand, timeout| {
+                seen_timeouts.push((cand.to_path_buf(), timeout));
+                if cand == c1 {
+                    clock.set(clock.get() + Duration::from_millis(800));
+                    Some(false)
+                } else {
+                    clock.set(clock.get() + timeout);
+                    None
+                }
+            },
+        );
+        assert_eq!(picked, Some(c1.clone()), "exhausted budget falls back to first candidate");
+        assert_eq!(seen_timeouts, vec![(c1.clone(), Duration::from_millis(900)), (c2.clone(), Duration::from_millis(100))]);
+
+        // Within budget: c1 spends 400 ms (v1), c2 gets 500 ms remaining and confirms v2.
+        clock.set(t0);
+        let mut seen_within = Vec::new();
+        let picked = pick_opencode_candidate_with(
+            vec![c1.clone(), c2.clone()],
+            Duration::from_millis(900),
+            || clock.get(),
+            |cand, timeout| {
+                seen_within.push((cand.to_path_buf(), timeout));
+                if cand == c1 {
+                    clock.set(clock.get() + Duration::from_millis(400));
+                    Some(false)
+                } else {
+                    clock.set(clock.get() + Duration::from_millis(100));
+                    Some(true)
+                }
+            },
+        );
+        assert_eq!(picked, Some(c2.clone()), "v2 confirmed within shared budget wins");
+        assert_eq!(seen_within, vec![(c1, Duration::from_millis(900)), (c2, Duration::from_millis(500))]);
     }
 
     #[test]
