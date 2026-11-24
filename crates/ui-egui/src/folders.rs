@@ -402,5 +402,12 @@ mod tests {
         app.open_workspace(ws.clone());
         assert!(app.settings.project_folders.contains(&ws.root));
         assert_eq!(app.workspace.as_ref().map(|w| &w.root), Some(&ws.root));
+
+        // Stale `Done::Projects` snapshot arriving after "Stop listing" must not put the unlisted
+        // folder's project back into `app.projects`, while still keeping listed projects visible.
+        app.remove_project_folder(&ws.root);
+        app.handle_done(crate::jobs::Finished { job: 99, result: Ok(crate::Done::Projects(vec![ws.clone(), listed_ws.clone()])) });
+        assert!(!app.projects.iter().any(|p| p.root == ws.root), "stale Done::Projects snapshot must not re-add unlisted project");
+        assert!(app.projects.iter().any(|p| p.root == listed_ws.root), "still-listed project remains in sidebar");
     }
 }

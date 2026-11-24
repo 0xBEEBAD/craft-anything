@@ -1630,6 +1630,7 @@ impl CraftApp {
         match done {
             Done::Nothing => {}
             Done::Projects(mut p) => {
+                p.retain(|w| self.settings.lists_project(&w.root));
                 if let Some(ws) = &self.workspace
                     && self.settings.lists_project(&ws.root)
                     && !p.iter().any(|w| w.root == ws.root)
