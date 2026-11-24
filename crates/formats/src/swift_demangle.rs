@@ -1626,8 +1626,19 @@ impl<'a> D<'a> {
                     b'v' => return self.outlined_variable(),
                     b'L' => return self.protocol_requirements_base_descriptor(),
                     b'g' => return self.generic_specialization(),
+                    b'x' => "dynamically replaceable key for",
+                    b'X' => "dynamically replaceable variable for",
+                    b'I' => "dynamically replaceable thunk for",
                     _ => return Err("unsupported thunk or specialization".into()),
                 };
+                if matches!(k, b'x' | b'X' | b'I') {
+                    if matches!(self.stack.last(), Some(N::FirstMarker)) {
+                        return Err("dynamically replaceable operand is a parser marker".into());
+                    }
+                    if !matches!(self.stack.last(), Some(N::Global { .. } | N::Entity { .. } | N::Nominal { .. })) {
+                        return Err("dynamically replaceable operand is not a global or entity".into());
+                    }
+                }
                 self.global(prefix)
             }
             b'W' => {
