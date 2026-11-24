@@ -3833,6 +3833,9 @@ Owner: open · Status: in progress
 - [x] Decode Swift generic-parameter names past `Z` as `AB`, `BB`, etc. (was `A1`, `B1`).
       — claimed: Chr0mium24, branch bugfix/r3.12-swift-demangle-generic-names
 
+- [x] Decode Swift associated conformance descriptors (`Tn`): print `associated conformance descriptor for <declaring>.<assoc path>: <conforming>`, consuming multi-segment associated-type paths.
+      — claimed: Chr0mium24, branch bugfix/r3.12-swift-demangle-assoc-conf-desc
+
 ### R3.13 Web inspection correctness
 Owner: open · Status: in progress
 - [x] Decode character references in HTML page titles before returning their displayed text.
