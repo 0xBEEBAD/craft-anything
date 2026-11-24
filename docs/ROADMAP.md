@@ -3777,6 +3777,10 @@ Owner: open · Status: in progress
 
 - [x] `MQ` on an opaque return type decodes as the opaque type descriptor of that declaration (for example `_$s12FinanceKitUI16OrderPaymentViewV4bodyQrvpQOMQ`).
       — claimed: Chr0mium24, branch bugfix/r3.12-swift-demangle-opaque-type-desc
+- [x] Swift associated type descriptors `PTl` were invalid; they now read "associated type descriptor for"
+      followed by the dotted path `DeclaringType.AssociatedType` (e.g. `Human.ComputeNode.Input`),
+      as `swift-demangle` prints them, consuming the declaring type and the associated type name.
+      — claimed: Chr0mium24, branch bugfix/r3.12-swift-demangle-assoc-type-desc
 
 ### R3.13 Web inspection correctness
 Owner: open · Status: in progress
