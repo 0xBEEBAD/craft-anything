@@ -3818,6 +3818,8 @@ Owner: open · Status: in progress
       `_$s10AppIntents20IntentCollectionSizeV7exactlyACSiYt_tcfC` prints
       `AppIntents.IntentCollectionSize.init(exactly: _const Swift.Int) -> AppIntents.IntentCollectionSize`.
       — claimed: Chr0mium24, branch bugfix/r3.12-swift-demangle-const-isolated
+- [x] Decode Swift punycode-encoded identifiers (the `00` prefix) using modified Punycode so identifiers containing non-ASCII characters demangle.
+      — claimed: Chr0mium24, branch bugfix/r3.12-swift-demangle-punycode
 
 ### R3.13 Web inspection correctness
 Owner: open · Status: in progress
