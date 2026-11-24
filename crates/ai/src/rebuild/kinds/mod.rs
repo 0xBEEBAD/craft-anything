@@ -3,6 +3,7 @@
 //! [`Check`]s that judge a build. A [`KindRegistry`] holds them; add a kind by implementing the
 //! trait and calling [`KindRegistry::register`].
 
+pub mod a11y_floor;
 mod app;
 pub mod carry_over;
 mod game;
