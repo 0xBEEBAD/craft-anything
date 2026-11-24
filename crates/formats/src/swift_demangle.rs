@@ -1655,6 +1655,7 @@ impl<'a> D<'a> {
                     )
                 {
                     return Err("protocol self-conformance witness of a non-entity".into());
+                }
                 if matches!(k, b'x' | b'X' | b'I') {
                     if matches!(self.stack.last(), Some(N::FirstMarker)) {
                         return Err("dynamically replaceable operand is a parser marker".into());
