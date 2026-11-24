@@ -86,7 +86,7 @@ pub struct Texture {
 }
 
 /// A name-table entry by index (the name's number is ignored).
-fn name<'n>(names: &'n [String], c: &mut Cur, what: &str) -> Result<&'n str, FormatError> {
+pub(crate) fn name<'n>(names: &'n [String], c: &mut Cur, what: &str) -> Result<&'n str, FormatError> {
     let i = c.i32(what)?;
     c.i32(what)?;
     usize::try_from(i).ok().and_then(|i| names.get(i)).map(String::as_str).ok_or_else(|| FormatError::Malformed(format!("{what} names entry {i}")))
@@ -157,7 +157,7 @@ pub fn package(uasset: &[u8]) -> Result<Package, FormatError> {
 }
 
 /// Skip the tagged properties up to `None`.
-fn skip_properties(c: &mut Cur, names: &[String]) -> Result<(), FormatError> {
+pub(crate) fn skip_properties(c: &mut Cur, names: &[String]) -> Result<(), FormatError> {
     for _ in 0..10_000 {
         let property = name(names, c, "property name")?;
         if property == "None" {
