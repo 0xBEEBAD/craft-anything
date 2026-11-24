@@ -3799,6 +3799,8 @@ Owner: open · Status: in progress
       `_$s10Foundation12CharacterSetV12charactersInACSSh_tcfC` reads
       "Foundation.CharacterSet.init(charactersIn: __shared Swift.String) -> Foundation.CharacterSet".
       — claimed: Chr0mium24, branch bugfix/r3.12-swift-demangle-shared
+- [x] Swift parameter ownership `__owned` (operator `n`) now decodes as `__owned T`, e.g. `_$ss10ArraySliceV6appendyyxnF` reads `Swift.ArraySlice.append(__owned A) -> ()`; it previously reported `unsupported operator 'n'`.
+      — claimed: Chr0mium24, branch bugfix/r3.12-swift-demangle-owned
 
 ### R3.13 Web inspection correctness
 Owner: open · Status: in progress
