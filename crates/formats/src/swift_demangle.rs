@@ -1808,10 +1808,6 @@ impl<'a> D<'a> {
                         self.push(N::Entity { kind, ctx: Box::new(ctx), name: None, labels, ty: Some(Box::new(ty)), accessor: None, is_static: false })
                     }
                     _ => {
-                        let ctx = self.pop_context()?;
-                        if matches!(kind, EKind::DeallocDeinit) && !Self::is_class_context(&ctx) {
-                            kind = EKind::Deinit;
-                        }
                         let ctx = match kind {
                             EKind::PropertyWrapperBackingInitializer | EKind::PropertyWrapperInitFromProjected => match self.pop()? {
                                 v @ N::Entity { kind: EKind::Var, accessor: Some(_), .. } => v,
@@ -1819,6 +1815,9 @@ impl<'a> D<'a> {
                             },
                             _ => self.pop_context()?,
                         };
+                        if matches!(kind, EKind::DeallocDeinit) && !Self::is_class_context(&ctx) {
+                            kind = EKind::Deinit;
+                        }
                         self.push(N::Entity { kind, ctx: Box::new(ctx), name: None, labels: Vec::new(), ty: None, accessor: None, is_static: false })
                     }
                 }
