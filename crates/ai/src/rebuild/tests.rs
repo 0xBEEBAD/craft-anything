@@ -462,11 +462,11 @@ fn engine_stacks_get_their_own_steps_checks_and_play() {
 
     let d = tempfile::tempdir().unwrap();
     let stop = CheckStop::default();
-    assert_eq!(build_check(d.path(), "app/", "Unity", Some(ed), &stop).unwrap(), (false, "No Unity project found in app/ yet.".into()));
-    assert_eq!(build_check(d.path(), "app/", "Godot", Some(ed), &stop).unwrap(), (false, "No Godot project (project.godot) found in app/ yet.".into()));
-    assert!(build_check(d.path(), "app/", "Unreal Engine", Some(ed), &stop).unwrap().1.contains(".uproject"));
+    assert_eq!(build_check(d.path(), "app/", "Unity", None, Some(ed), &stop).unwrap(), (false, "No Unity project found in app/ yet.".into()));
+    assert_eq!(build_check(d.path(), "app/", "Godot", None, Some(ed), &stop).unwrap(), (false, "No Godot project (project.godot) found in app/ yet.".into()));
+    assert!(build_check(d.path(), "app/", "Unreal Engine", None, Some(ed), &stop).unwrap().1.contains(".uproject"));
     // #174: an app edited in place is said to be in the project folder, not in an app/ that isn't there.
-    let none = build_check(d.path(), "the project folder", "Builder's choice", None, &stop).unwrap();
+    let none = build_check(d.path(), "the project folder", "Builder's choice", None, None, &stop).unwrap();
     assert_eq!(none, (false, "No project to build found in the project folder yet.".into()));
 
     // Play: a Godot project opens in Godot; a packaged Unity build runs its own program.
@@ -549,6 +549,7 @@ fn notes_added_while_it_works_reach_the_agent_at_its_next_step() {
         usage: None,
         self_check: None,
         reset_progress_after_notes: false,
+        taken_in_turn: Vec::new(),
     };
     assert!(w.added(&mut ws, true, true).is_none(), "nothing added, nothing to say");
     use craft_anything_engine::questions::{self, AskedQuestion};
@@ -1498,6 +1499,7 @@ fn an_api_backend_builds_with_the_build_tools() {
         usage: None,
         self_check: None,
         reset_progress_after_notes: false,
+        taken_in_turn: Vec::new(),
     };
     w.attach(&ws).unwrap();
     // The model writes a file with the Build tools, then answers.
@@ -1628,6 +1630,7 @@ fn the_mechanics_sheet_is_required_without_claiming_effective_behavior() {
         usage: None,
         self_check: None,
         reset_progress_after_notes: false,
+        taken_in_turn: Vec::new(),
     };
     let check = |round| w.run_checks(&ws, &SheetKind, round).unwrap().remove(0);
 
@@ -2942,6 +2945,7 @@ pub(crate) fn check_worker(ws: &Workspace, deep: bool) -> Worker {
         usage: None,
         self_check: None,
         reset_progress_after_notes: false,
+        taken_in_turn: Vec::new(),
         keys: crate::KeyStore::file_only(ws.root.join("keys.toml")),
         kept_checks: Mutex::default(),
     }
@@ -3544,6 +3548,7 @@ fn preparing_the_builders_agent_does_not_lock_up() {
         usage: None,
         self_check: None,
         reset_progress_after_notes: false,
+        taken_in_turn: Vec::new(),
     };
     let entry = crate::BackendEntry {
         config: crate::BackendConfig {
@@ -3587,6 +3592,7 @@ fn the_run_answers_the_builders_own_check_during_its_turn() {
         usage: None,
         self_check: Some((Arc::new(SheetKind), 90.0)),
         reset_progress_after_notes: false,
+        taken_in_turn: Vec::new(),
     };
     let mut builder = ChecksItsWork { root: ws.root.clone(), asked: None, reply: None };
     let reply = w.turn(&mut ws, &mut builder, "Build it.", true, None).unwrap();
@@ -3626,6 +3632,7 @@ fn a_stopped_build_answers_the_check_it_took() {
         usage: None,
         self_check: Some((Arc::new(SheetKind), 90.0)),
         reset_progress_after_notes: false,
+        taken_in_turn: Vec::new(),
     };
     let asks = Inbox::new(self_check::asks_dir(&ws.root));
     let id = asks.post(craft_anything_engine::inbox::RequestKind::Question, "Check the build", "", Vec::new(), false, None).unwrap();
@@ -3635,6 +3642,104 @@ fn a_stopped_build_answers_the_check_it_took() {
     let answer = asks.wait(&id, Duration::from_secs(2), &|| false).expect("the taken check is answered");
     assert_eq!(answer.text.as_deref(), Some(self_check::STOPPED_ANSWER));
     assert!(self_check::taken_mark(&ws.root, &id).unwrap().is_file(), "the mark is left for the asker to read");
+}
+
+/// #1734 review: a tool finished while another held the session, so the investigation view waited
+/// for a free moment; a stopped check then ended the turn early. The view still gets what the
+/// finished tool wrote.
+#[test]
+fn a_turn_ended_by_a_stopped_check_still_refreshes_the_investigation() {
+    struct Wrote {
+        investigation: PathBuf,
+        polls: usize,
+    }
+    impl Conversation for Wrote {
+        fn send(&mut self, _: &str) {}
+        fn poll(&mut self) -> Vec<AgentEvent> {
+            self.polls += 1;
+            if self.polls > 1 {
+                return Vec::new();
+            }
+            let project = craft_anything_engine::project::Project::open(&self.investigation).unwrap();
+            project
+                .store_unknown(&craft_anything_evidence::Unknown::new("What does the save file hold?", "storage", craft_anything_evidence::Severity::default()))
+                .unwrap();
+            vec![AgentEvent::ToolFinished { call_id: "1".into(), tool: "core_unknown_record".into(), ok: true, summary: String::new(), evidence_id: None }]
+        }
+        fn answer_consent(&mut self, _: &str, _: bool) {}
+        fn stop(&mut self) {}
+        fn is_busy(&self) -> bool {
+            true
+        }
+    }
+
+    let d = tempfile::tempdir().unwrap();
+    let mut ws = Workspace::create(d.path(), "Arena", "Recreate this game", TargetRef::None).unwrap();
+    let mut w = check_worker(&ws, false);
+    w.self_check = Some((Arc::new(SheetKind), 90.0));
+    let project = craft_anything_engine::project::Project::create(&ws.investigation_dir(), "Arena", Default::default()).unwrap();
+    w.engine.session().open_project(project).unwrap();
+    let asks = self_check::asks_dir(&ws.root);
+    let id = Inbox::new(&asks).post(craft_anything_engine::inbox::RequestKind::Question, "Check the build", "", Vec::new(), false, None).unwrap();
+    // Another tool holds the session, as a decompile does, until the stopped check is answered:
+    // the turn's own refresh has failed by then and only the leaving one can succeed (#1746 review).
+    let (held, holding) = std::sync::mpsc::channel::<()>();
+    let engine = w.engine.clone();
+    let holder = std::thread::spawn(move || {
+        let _session = engine.session();
+        held.send(()).unwrap();
+        Inbox::new(&asks).wait(&id, Duration::from_secs(60), &|| false).expect("the stopped check is answered");
+    });
+    holding.recv().unwrap();
+    w.stop.cancel();
+    let mut agent = Wrote { investigation: ws.investigation_dir(), polls: 0 };
+    let err = w.turn_with_wait(&mut ws, &mut agent, "Carry on", true, None, |_, _| panic!("no retry")).unwrap_err();
+    holder.join().unwrap();
+    assert_eq!(err.code, ErrorCode::Cancelled, "the run still stops");
+    assert_eq!(w.engine.session().unknowns().count(), 1, "the view has what the finished tool wrote");
+}
+
+/// #1746 review: a stop isn't held up by a tool that keeps the session for longer, as a decompile
+/// waiting on Ghidra can; the view's refresh is given up.
+#[test]
+fn a_stopped_check_does_not_wait_for_a_busy_session() {
+    struct Finished;
+    impl Conversation for Finished {
+        fn send(&mut self, _: &str) {}
+        fn poll(&mut self) -> Vec<AgentEvent> {
+            vec![AgentEvent::ToolFinished { call_id: "1".into(), tool: "core_unknown_record".into(), ok: true, summary: String::new(), evidence_id: None }]
+        }
+        fn answer_consent(&mut self, _: &str, _: bool) {}
+        fn stop(&mut self) {}
+        fn is_busy(&self) -> bool {
+            true
+        }
+    }
+
+    let d = tempfile::tempdir().unwrap();
+    let mut ws = Workspace::create(d.path(), "Arena", "Recreate this game", TargetRef::None).unwrap();
+    let mut w = check_worker(&ws, false);
+    w.self_check = Some((Arc::new(SheetKind), 90.0));
+    let (held, holding) = std::sync::mpsc::channel::<()>();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let engine = w.engine.clone();
+    let holder = std::thread::spawn(move || {
+        let _session = engine.session();
+        held.send(()).unwrap();
+        let _ = released.recv_timeout(Duration::from_secs(60));
+    });
+    holding.recv().unwrap();
+    Inbox::new(self_check::asks_dir(&ws.root))
+        .post(craft_anything_engine::inbox::RequestKind::Question, "Check the build", "", Vec::new(), false, None)
+        .unwrap();
+    w.stop.cancel();
+    let started = Instant::now();
+    let err = w.turn_with_wait(&mut ws, &mut Finished, "Carry on", true, None, |_, _| panic!("no retry")).unwrap_err();
+    let took = started.elapsed();
+    release.send(()).unwrap();
+    holder.join().unwrap();
+    assert_eq!(err.code, ErrorCode::Cancelled, "the run still stops");
+    assert!(took < Duration::from_secs(20), "the stop waited {took:?} for the session");
 }
 
 /// A builder that reads one decompiled function (by its MCP name, as Claude Code calls it) and ends
@@ -3687,6 +3792,7 @@ fn decompiling_once_is_remembered_by_the_project() {
         usage: None,
         self_check: None,
         reset_progress_after_notes: false,
+        taken_in_turn: Vec::new(),
     };
     let mut builder = Decompiles { events: Vec::new() };
     w.turn(&mut ws, &mut builder, "Build it.", true, None).unwrap();
@@ -3752,6 +3858,7 @@ fn a_build_says_why_it_refused_a_tool_that_needs_consent() {
         usage: None,
         self_check: None,
         reset_progress_after_notes: false,
+        taken_in_turn: Vec::new(),
     };
     let mut builder = AsksConsent::default();
     w.turn(&mut ws, &mut builder, "Build it.", true, None).unwrap();
@@ -3965,6 +4072,7 @@ fn a_note_the_builder_took_at_a_step_joins_the_feed_and_isnt_sent_again() {
         usage: None,
         self_check: None,
         reset_progress_after_notes: false,
+        taken_in_turn: Vec::new(),
     };
     let dir = notes::notes_dir(&ws.inbox_dir());
     notes::hand_over(&dir, 1, "make the header blue", None).unwrap();
@@ -4413,6 +4521,7 @@ fn a_session_left_on_another_computer_starts_a_new_one_from_the_project() {
         usage: None,
         self_check: None,
         reset_progress_after_notes: false,
+        taken_in_turn: Vec::new(),
     };
     let first = resumed_elsewhere("THE BRIEF", &ws.manifest.last_reply, None);
     let reply = w.turn(&mut ws, &mut agent, "The person asks: make it blue", true, Some(first)).unwrap();
@@ -4469,6 +4578,7 @@ fn a_missing_session_with_nothing_to_start_from_is_said_plainly() {
         usage: None,
         self_check: None,
         reset_progress_after_notes: false,
+        taken_in_turn: Vec::new(),
     };
     let e = w
         .turn_with_wait(&mut ws, &mut agent, "Carry on.", true, None, |_, _| panic!("a missing session without a fresh start must not be retried"))
@@ -4536,6 +4646,7 @@ fn the_builders_conversation_travels_with_the_project() {
         usage: None,
         self_check: None,
         reset_progress_after_notes: false,
+        taken_in_turn: Vec::new(),
     };
     let adapter = KeepsSessions(store.path().to_path_buf());
     // No session yet, or one this computer doesn't have: nothing to keep, nothing said.
@@ -4614,6 +4725,7 @@ fn waiting_for_another_analysis(d: &Path, limit_secs: u64) -> (Worker, std::sync
         usage: None,
         self_check: None,
         reset_progress_after_notes: false,
+        taken_in_turn: Vec::new(),
     };
 
     // Another process is already analysing this program: a fresh lock beside its project.
@@ -4695,6 +4807,7 @@ fn a_later_run_opens_the_projects_program_again_for_the_builder() {
             usage: None,
             self_check: None,
             reset_progress_after_notes: false,
+            taken_in_turn: Vec::new(),
         };
         w.reopen_target(&mut ws, app.as_ref(), true, deep).unwrap();
         assert!(w.engine.session().shared_targets().is_empty(), "a builder over SSH isn't handed this computer's targets");
