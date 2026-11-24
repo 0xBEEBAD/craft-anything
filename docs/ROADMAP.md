@@ -736,6 +736,10 @@ Owner: open · Status: todo
 - [x] Bound accumulated data across all lines of one server-sent event, so short lines cannot
       grow a streamed API response without limit
       — claimed: Afloat16, branch bugfix/r5.5-bounded-sse-events-20261103
+- [ ] An API call interrupted by a signal (EINTR) is reported as "Couldn't reach {AI}" or "The
+      stream broke off" (`EngineMissing`), blaming the server or connection; say it was interrupted
+      and don't resend a request that may already be billed
+      — claimed: AlexJoaquimPereira, branch bugfix/r5.5-interrupted-ai-call
 - [x] Show the provider's own reason: #369 bought $10 of credit and got only "OpenRouter answered
       400: Provider returned error". Find the reason in the response body and show it — PR #542
 - [x] A Claude build failed with 400 "Invalid `signature` in `thinking` block" once the conversation
