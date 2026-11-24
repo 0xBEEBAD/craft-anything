@@ -585,8 +585,7 @@ mod tests {
         e.call(id, p, CallOptions::new(Caller::Mcp).with_consent(Consent::Granted)).map(|o| o.to_json()["result"].clone())
     }
 
-    /// #2251: a builder that can only find byte offsets rereads the same page until it runs out
-    /// of steps. A search gives the line, and reading at it shows the match.
+    /// A search's folder reads stop at its entry budget, failed reads included.
     #[test]
     fn a_folder_listing_stops_reading_at_the_budget() {
         let reads = std::cell::Cell::new(0);
@@ -600,6 +599,8 @@ mod tests {
         assert!(reads.get() < 10, "{} reads for a budget of 5", reads.get());
     }
 
+    /// #2251: a builder that can only find byte offsets rereads the same page until it runs out
+    /// of steps. A search gives the line, and reading at it shows the match.
     #[test]
     fn a_search_finds_the_line_a_read_then_opens() {
         let (_d, ws, e) = building();

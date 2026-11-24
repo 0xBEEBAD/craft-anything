@@ -1454,8 +1454,6 @@ impl Worker {
         }
     }
 
-    /// Notes the builder took at a step of this turn (its hook claimed them): they join the feed
-    /// now and aren't sent again after the turn.
     /// A turn whose conversation was lost ends with `e`: the notes it took wait for the next run.
     /// That run is sent their text alone, so the Just-ask answers they carried are untold again.
     fn give_back_taken(&mut self, ws: &Workspace, e: ToolError) -> ToolError {
@@ -1470,6 +1468,8 @@ impl Worker {
         e
     }
 
+    /// Notes the builder took at a step of this turn (its hook claimed them): they join the feed
+    /// now and aren't sent again after the turn.
     fn relay_read_notes(&mut self, ws: &Workspace) {
         let dir = notes::notes_dir(&ws.inbox_dir());
         let read: Vec<Note> = {
