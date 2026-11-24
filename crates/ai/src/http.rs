@@ -39,6 +39,12 @@ pub fn was_reached(e: &ToolError) -> bool {
     e.details.as_ref().and_then(|d| d.get("reached")).and_then(Value::as_bool).unwrap_or(false)
 }
 
+/// Whether a failure was a call cut short by a signal on this computer, not the server or the
+/// connection. Its own remediation says so, so a caller must not replace it with address advice.
+pub fn interrupted(e: &ToolError) -> bool {
+    e.details.as_ref().and_then(|d| d.get("interrupted")).and_then(Value::as_bool).unwrap_or(false)
+}
+
 /// The agent for quick calls (model lists, probes).
 pub fn quick_agent(total: Duration) -> ureq::Agent {
     agent(total, total, total)
@@ -48,6 +54,13 @@ pub fn quick_agent(total: Duration) -> ureq::Agent {
 /// told apart: the internet has nothing to do with it, and one that took the request but didn't
 /// start answering was reached, so "Couldn't reach" misled (a large model still loading, #1239).
 fn net_error(what: &str, url: &str, e: ureq::Error) -> ToolError {
+    // A signal that reaches this thread (a child process ending elsewhere, for one) cuts the call
+    // short: that says nothing about the AI or the connection, and a sent request may be billed.
+    if matches!(&e, ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::Interrupted) {
+        return ToolError::new(ErrorCode::ProgramFailed, format!("{what} was interrupted before it answered: {e}"))
+            .with_remediation("A signal on this computer cut the call short, not the AI: the request may have reached it, so check before sending it again.")
+            .with_details(serde_json::json!({"interrupted": true}));
+    }
     let local = is_this_computer(url);
     const LONGER: &str = "To wait longer, set timeout_secs (in seconds) for this AI under [[ai.backends]] in config.toml; the wait is five minutes unless set.";
     if matches!(e, ureq::Error::Timeout(ureq::Timeout::RecvResponse)) {
@@ -251,6 +264,15 @@ const MAX_SSE_EVENT_DATA: usize = 8 * 1024 * 1024;
 
 /// A stream that stopped mid-answer. One that ran out of time says how to give it more (#1096).
 fn stream_broke_off(e: std::io::Error) -> ToolError {
+    // An interrupted read isn't a broken stream or a short answer: the answer may be intact, and a
+    // request already sent may be billed.
+    if e.kind() == std::io::ErrorKind::Interrupted {
+        return ToolError::new(ErrorCode::ProgramFailed, format!("The answer was interrupted before it finished: {e}"))
+            .with_remediation(
+                "A signal on this computer cut the stream short, not the AI: try again if the answer is incomplete; a request already sent may be billed.",
+            )
+            .with_details(serde_json::json!({"interrupted": true}));
+    }
     let e = ureq::Error::from(e);
     let err = ToolError::new(ErrorCode::EngineMissing, format!("The stream broke off: {e}"));
     match e {
@@ -337,6 +359,32 @@ mod tests {
         assert!(timed_out.remediation.as_deref().is_some_and(|r| r.contains("timeout_secs")), "{timed_out:?}");
         let cut = parse_sse(Fails(|| ureq::Error::ConnectionFailed), |_| Ok(true)).unwrap_err();
         assert!(cut.remediation.is_none(), "{cut:?}");
+    }
+
+    /// An interrupted send isn't the AI being unreachable: a signal on this computer cut the call
+    /// short, and a request that may already have been billed must not read as a transient server
+    /// problem.
+    #[test]
+    fn an_interrupted_call_is_not_an_unreachable_ai() {
+        let e = ureq::Error::Io(std::io::Error::from(std::io::ErrorKind::Interrupted));
+        let err = net_error("Ollama", "http://127.0.0.1:11434/v1/chat/completions", e);
+        assert_eq!((err.code, err.retryable), (ErrorCode::ProgramFailed, false), "{err:?}");
+        assert!(err.message.contains("interrupted"), "{err:?}");
+        assert!(!err.message.contains("Couldn't reach"), "{err:?}");
+        assert!(interrupted(&err), "{err:?}");
+        assert!(err.remediation.as_deref().is_some_and(|r| r.contains("may have reached")), "{err:?}");
+    }
+
+    /// An interrupted answer stream isn't a broken server or a malformed answer: say it was
+    /// interrupted, and don't invite a resend that may be billed again.
+    #[test]
+    fn an_interrupted_answer_is_not_a_broken_stream() {
+        let err = stream_broke_off(std::io::Error::from(std::io::ErrorKind::Interrupted));
+        assert_eq!((err.code, err.retryable), (ErrorCode::ProgramFailed, false), "{err:?}");
+        assert!(err.message.contains("interrupted"), "{err:?}");
+        assert!(!err.message.contains("broke off"), "{err:?}");
+        assert!(interrupted(&err), "{err:?}");
+        assert!(err.remediation.as_deref().is_some_and(|r| r.contains("may be billed")), "{err:?}");
     }
 
     /// #1239: an answer that never started (a server busy with another tool's work) says which
