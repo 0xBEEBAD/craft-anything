@@ -3781,6 +3781,8 @@ Owner: open · Status: in progress
       followed by the dotted path `DeclaringType.AssociatedType` (e.g. `Human.ComputeNode.Input`),
       as `swift-demangle` prints them, consuming the declaring type and the associated type name.
       — claimed: Chr0mium24, branch bugfix/r3.12-swift-demangle-assoc-type-desc
+- [x] Swift generic parameters at depth > 0 (`qd__`, `qd_0_` …) now decode as `A1`, `B1` instead of `expected an index`, both as types and in generic requirements, reading the depth and the parameter index; other depths and other generic-parameter forms stay invalid. Example symbol `_$sSz18truncatingIfNeededxqd___tcSzRd__lufCTj` now prints `dispatch thunk of Swift.BinaryInteger.init<A where A1: Swift.BinaryInteger>(truncatingIfNeeded: A1) -> A`.
+      — claimed: Chr0mium24, branch bugfix/r3.12-swift-demangle-deep-generics
 
 ### R3.13 Web inspection correctness
 Owner: open · Status: in progress
