@@ -2635,6 +2635,9 @@ Owner: open · Status: in progress
       — claimed: Afloat16, branch feature/r3.12-python315-bytecode
 - [x] Compare memory maximums, shared flags, memory address widths, and table maximums in WebAssembly imports and exports.
       — claimed: Afloat16, branch bugfix/r3.12-wasm-resource-signatures (#2355)
+- [ ] Match `**/` ignore rules without repeatedly scanning each remaining path suffix,
+      preserving nested, escaped and negated rule behavior (#2364).
+      — claimed: Afloat16, branch bugfix/r3.12-globstar-path-scan
 - [x] Keep source-to-bundle comparisons uncertain when source-map inventories are truncated, preserving positive matches and reporting partial tool evidence.
       — claimed: Afloat16, branch bugfix/r3.12-source-map-comparison-uncertainty-20261111
 - [x] Bound expanded source-map inventories by retained path bytes and entries before allocation, preserving bounded prefixes and reporting truncation.

@@ -49,6 +49,11 @@ contributors under the Python Software Foundation License Version 2. Their imple
 not bundled here. The format references are the [magic-number declarations](https://github.com/python/cpython/blob/5e58eaad7c58df58dfa8ea549c87996e01dd1077/Include/internal/pycore_magic_number.h)
 and [marshal writer/reader](https://github.com/python/cpython/blob/5e58eaad7c58df58dfa8ea549c87996e01dd1077/Python/marshal.c)
 at that release's fixed commit.
+## Ignore-matcher controls
+
+The separated-globstar paths in `crates/analysis/tests/gitignore_pattern_rules.rs` are original
+test inputs by Afloat16, under MIT OR Apache-2.0. Their ignore decisions were checked against
+Git's `check-ignore` command; no Git implementation is included.
 
 ## Icons (`assets/icons/`)
 
