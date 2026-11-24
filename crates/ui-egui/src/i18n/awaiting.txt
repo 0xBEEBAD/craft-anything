@@ -49,3 +49,6 @@ Test a plugin
 It answered, with no tools.
 It answered with {n} tools: {names}.
 The plugin's test failed.
+This run used {tokens}, {cost}.
+This run used {tokens}. Its cost isn't known: not every turn reported its own.
+This run's builder didn't report how many tokens it used.
