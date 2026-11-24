@@ -3810,6 +3810,12 @@ Owner: open · Status: in progress
 
 - [x] Decode Swift `TE`/`TF` suffixes as distributed thunk and distributed accessor (and the `Tu` async-function-pointer form), followed by the base function.
       — claimed: Chr0mium24, branch bugfix/r3.12-swift-demangle-distributed
+- [x] Swift symbols using the `_const` (`Yt`) and `isolated` (`Yi`) type attributes on a
+      parameter or value were rejected as `unsupported function attribute`; they now print
+      `_const …` and `isolated …` as `swift-demangle` does, for example
+      `_$s10AppIntents20IntentCollectionSizeV7exactlyACSiYt_tcfC` prints
+      `AppIntents.IntentCollectionSize.init(exactly: _const Swift.Int) -> AppIntents.IntentCollectionSize`.
+      — claimed: Chr0mium24, branch bugfix/r3.12-swift-demangle-const-isolated
 
 ### R3.13 Web inspection correctness
 Owner: open · Status: in progress
