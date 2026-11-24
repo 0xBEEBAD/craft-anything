@@ -7,6 +7,8 @@ Copy these lines
 Wrap long lines
 Drag to change the height
 {name}: build activity
+{name} is turned off. Turn it on or choose another AI.
+Choose another AI
 Requests per minute
 Set request rate
 Set to 0 for no limit.
