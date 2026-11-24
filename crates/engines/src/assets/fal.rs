@@ -131,6 +131,13 @@ impl Fal {
             )
             .with_remediation("Check the generation in the fal.ai dashboard before trying again: sending it again may charge you twice.");
         }
+        if matches!(&e, ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::UnexpectedEof) {
+            return ToolError::new(
+                ErrorCode::ProgramFailed,
+                format!("The call to fal.ai was cut off before it answered: {e}. The generation may already be running and billed."),
+            )
+            .with_remediation("Check the generation in the fal.ai dashboard before trying again: sending it again may charge you twice.");
+        }
         ToolError::new(ErrorCode::EngineMissing, format!("Couldn't reach fal.ai: {e}")).with_remediation("Check your internet connection and try again.")
     }
 
@@ -349,6 +356,47 @@ mod tests {
         let refused = Fal::post_error(ureq::Error::ConnectionFailed);
         assert_eq!(refused.code, ErrorCode::EngineMissing, "{refused:?}");
         assert!(refused.message.starts_with("Couldn't reach fal.ai"), "{refused:?}");
+
+        // Failing to establish the connection, or to resolve the name, never sent the POST.
+        for kind in [std::io::ErrorKind::ConnectionRefused, std::io::ErrorKind::NotFound] {
+            let failed = Fal::post_error(ureq::Error::Io(std::io::Error::from(kind)));
+            assert_eq!(failed.code, ErrorCode::EngineMissing, "{failed:?}");
+            assert!(failed.message.starts_with("Couldn't reach fal.ai"), "{failed:?}");
+        }
+    }
+
+    /// A server that accepts the POST, reads it, and closes without sending response headers.
+    fn serve_closed() -> String {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", l.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (stream, _) = l.accept().unwrap();
+            let mut r = BufReader::new(stream.try_clone().unwrap());
+            let mut len = 0usize;
+            loop {
+                let mut line = String::new();
+                r.read_line(&mut line).unwrap();
+                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    len = v.trim().parse().unwrap();
+                }
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            let mut request_body = vec![0; len];
+            r.read_exact(&mut request_body).unwrap();
+            drop(stream);
+        });
+        base
+    }
+
+    /// The POST was consumed before the connection closed, so the generation may have started.
+    #[test]
+    fn a_disconnect_before_the_answer_is_billed_aware() {
+        let err = Fal { base: serve_closed() }.post("k", "model", &json!({})).unwrap_err();
+        assert_eq!((err.code, err.retryable), (ErrorCode::ProgramFailed, false), "{err:?}");
+        assert!(err.message.contains("may already be running") && err.message.contains("billed"), "{err:?}");
+        assert!(err.remediation.as_deref().is_some_and(|r| r.contains("dashboard")), "{err:?}");
     }
 
     /// A local server that accepts one generation POST and sends 200 headers, then fewer body
