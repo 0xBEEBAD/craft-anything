@@ -962,8 +962,7 @@ fn ai(app: &mut CraftApp, ui: &mut Ui) {
                     );
                     widgets::named(r, &trf("{name} key", &[("name", &d.suggestion.name)]));
                     let k = key.trim().to_string();
-                    let add_label = if d.needs_key { "Add" } else { "Add with key" };
-                    if widgets::primary_icon(ui, None, add_label, !k.is_empty()).clicked() && !k.is_empty() {
+                    if widgets::primary_icon(ui, None, if d.needs_key { "Add" } else { "Add with key" }, !k.is_empty()).clicked() && !k.is_empty() {
                         // The key goes to the keychain; the app keeps no copy of it.
                         app.key_inputs.remove(&d.suggestion.name);
                         app.add_backend(d.suggestion.clone(), Some(k));
