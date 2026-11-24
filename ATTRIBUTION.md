@@ -54,6 +54,14 @@ at that release's fixed commit.
 The separated-globstar paths in `crates/analysis/tests/gitignore_pattern_rules.rs` are original
 test inputs by Afloat16, under MIT OR Apache-2.0. Their ignore decisions were checked against
 Git's `check-ignore` command; no Git implementation is included.
+## Keyed-archive ownership regression inputs
+
+The new ownership and duplicate-field inputs in
+`crates/formats/tests/keyed_archive_pages.rs` and caller comparison in
+`crates/engine/tests/keyed_archive_pagination.rs` are original test work by Afloat16,
+under MIT OR Apache-2.0. The inputs are generated with the repository testkit; the
+caller comparison reuses its existing keyed-archive example unchanged. No
+third-party files or assets are included.
 
 ## Icons (`assets/icons/`)
 
