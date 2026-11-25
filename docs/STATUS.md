@@ -543,8 +543,12 @@ coverage and secrets passed. The companion CLI was built with locked dependencie
 
 Builder failures carry a typed reason through `Conversation::last_failure`. Typed authentication,
 billing, missing programs, unavailable tools, configuration and unknown protocol failures stop
-for attention. Transport interruptions, rate limits and nonzero process exits without a typed
-error get at most three retries; the decision no longer searches English error messages.
+for attention. Transport interruptions and nonzero process exits without a typed error get at
+most three retries. A rate limit is tried again up to 15 times a turn, waiting what the service
+asks or up to 5 minutes, and then the build stops with the reason (#2379); Pause ends a wait. A
+used-up quota is a billing failure and stops, and so does a request larger than the service's
+limit, which OpenAI answers as a rate limit. That one is told by the service's words ("request
+too large"); otherwise the decision no longer searches English error messages.
 A Claude Code rate limit after its stream said the plan's limit refused the turn
 (`rate_limit_event` with `status: rejected`: the 5-hour or weekly allowance) isn't retried; the
 build stops and says which limit and about when it resets (#1919). Unit-tested on the stream;
