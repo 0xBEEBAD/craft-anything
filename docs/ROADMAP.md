@@ -2397,6 +2397,9 @@ Gaps found while using the app for real projects.
       terminal found npm (#2178): programs are looked up in a PATH whose `%VAR%` entries are
       expanded (`which::expand_vars`), and in Node.js's own install folder after it
       — claimed: justinjohn0306, branch bugfix/2178-npm-on-windows-path
+- [ ] Esc while typing in a project's prompt box stays on the project and keeps the draft; it went
+      to the new-project screen (#2434)
+      — claimed: ilijachrchev, branch bugfix/2434-esc-in-prompt
 
 ### R2.10 Pinned builds
 Owner: maintainers · Status: in progress
