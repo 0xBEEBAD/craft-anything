@@ -1,9 +1,10 @@
 //! HTTP plumbing: one ureq agent (rustls), JSON POST with streamed responses, and an SSE parser.
 
 use craft_anything_evidence::{ErrorCode, ToolError};
+use craft_anything_platform::retry;
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Read};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Generic, non-identifying User-Agent.
 pub const USER_AGENT: &str = "CraftAnything-dev";
@@ -56,7 +57,7 @@ pub fn quick_agent(total: Duration) -> ureq::Agent {
 fn net_error(what: &str, url: &str, e: ureq::Error) -> ToolError {
     // A signal that reaches this thread (a child process ending elsewhere, for one) cuts the call
     // short: that says nothing about the AI or the connection, and a sent request may be billed.
-    if matches!(&e, ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::Interrupted) {
+    if matches!(&e, ureq::Error::Io(io) if retry::interrupted(io)) {
         return ToolError::new(ErrorCode::ProgramFailed, format!("{what} was interrupted before it answered: {e}"))
             .with_remediation("A signal on this computer cut the call short, not the AI: the request may have reached it, so check before sending it again.")
             .with_details(serde_json::json!({"interrupted": true}));
@@ -235,8 +236,22 @@ pub fn post_json(agent: &ureq::Agent, what: &str, url: &str, headers: &[(&str, S
     Ok(Box::new(resp.into_body().into_reader()))
 }
 
-/// GET JSON.
-pub fn get_json(agent: &ureq::Agent, what: &str, url: &str, headers: &[(&str, String)]) -> Result<Value, ToolError> {
+/// How many times a GET cut short by a signal is tried in all.
+const GET_TRIES: u32 = 3;
+
+/// GET JSON. A GET is safe to repeat, unlike a POST that may already be billed, so a call cut
+/// short by a signal on this computer is simply made again within `deadline`.
+pub fn get_json(agent: &ureq::Agent, what: &str, url: &str, headers: &[(&str, String)], deadline: Instant) -> Result<Value, ToolError> {
+    get_json_within(deadline, |_| get_json_once(agent, what, url, headers)).map_err(get_error)
+}
+
+/// The retry loop `get_json` uses, with the call separate so a test can cut it short.
+fn get_json_within(deadline: Instant, call: impl FnMut(Duration) -> Result<Value, ToolError>) -> Result<Value, ToolError> {
+    retry::when_interrupted(GET_TRIES, deadline, call, interrupted)
+}
+
+/// One GET attempt. The agent's own timeouts bound it; a retry only starts while time is left.
+fn get_json_once(agent: &ureq::Agent, what: &str, url: &str, headers: &[(&str, String)]) -> Result<Value, ToolError> {
     let mut req = agent.get(url);
     for (k, v) in headers {
         req = req.header(*k, v.as_str());
@@ -248,6 +263,15 @@ pub fn get_json(agent: &ureq::Agent, what: &str, url: &str, headers: &[(&str, St
         return Err(status_error(what, status, &text));
     }
     serde_json::from_str(&text).map_err(|e| ToolError::new(ErrorCode::GarbledOutput, format!("{what} sent JSON we couldn't read: {e}")))
+}
+
+/// A GET that stayed interrupted after its tries: repeating a read is safe, so it doesn't get the
+/// POST warning about a request that may already be billed.
+fn get_error(mut e: ToolError) -> ToolError {
+    if interrupted(&e) {
+        e.remediation = Some("A signal on this computer kept cutting the request short. Try again: reading is safe to repeat.".into());
+    }
+    e
 }
 
 /// One server-sent event.
@@ -263,16 +287,9 @@ const MAX_SSE_LINE: usize = 8 * 1024 * 1024;
 const MAX_SSE_EVENT_DATA: usize = 8 * 1024 * 1024;
 
 /// A stream that stopped mid-answer. One that ran out of time says how to give it more (#1096).
+/// `BufRead::read_until` already retries an interrupted read, so a failure here is a broken
+/// stream or a short answer, not a signal on this computer.
 fn stream_broke_off(e: std::io::Error) -> ToolError {
-    // An interrupted read isn't a broken stream or a short answer: the answer may be intact, and a
-    // request already sent may be billed.
-    if e.kind() == std::io::ErrorKind::Interrupted {
-        return ToolError::new(ErrorCode::ProgramFailed, format!("The answer was interrupted before it finished: {e}"))
-            .with_remediation(
-                "A signal on this computer cut the stream short, not the AI: try again if the answer is incomplete; a request already sent may be billed.",
-            )
-            .with_details(serde_json::json!({"interrupted": true}));
-    }
     let e = ureq::Error::from(e);
     let err = ToolError::new(ErrorCode::EngineMissing, format!("The stream broke off: {e}"));
     match e {
@@ -375,16 +392,38 @@ mod tests {
         assert!(err.remediation.as_deref().is_some_and(|r| r.contains("may have reached")), "{err:?}");
     }
 
-    /// An interrupted answer stream isn't a broken server or a malformed answer: say it was
-    /// interrupted, and don't invite a resend that may be billed again.
+    /// A GET is safe to repeat, so a signal that cuts one short is tried again rather than
+    /// reported as an interrupted or unreachable call. After the tries, the interrupted error is
+    /// kept; another failure is the server's answer and is returned at once.
     #[test]
-    fn an_interrupted_answer_is_not_a_broken_stream() {
-        let err = stream_broke_off(std::io::Error::from(std::io::ErrorKind::Interrupted));
-        assert_eq!((err.code, err.retryable), (ErrorCode::ProgramFailed, false), "{err:?}");
-        assert!(err.message.contains("interrupted"), "{err:?}");
-        assert!(!err.message.contains("broke off"), "{err:?}");
-        assert!(interrupted(&err), "{err:?}");
-        assert!(err.remediation.as_deref().is_some_and(|r| r.contains("may be billed")), "{err:?}");
+    fn an_interrupted_get_is_asked_again() {
+        let cut = || net_error("Ollama", "http://127.0.0.1:11434/v1/models", ureq::Error::Io(std::io::Error::from(std::io::ErrorKind::Interrupted)));
+        let mut calls = 0;
+        let got = get_json_within(Instant::now() + Duration::from_secs(30), |_| {
+            calls += 1;
+            if calls < 3 { Err(cut()) } else { Ok(serde_json::json!({"data": []})) }
+        });
+        assert_eq!(calls, 3);
+        assert_eq!(got.unwrap()["data"], serde_json::json!([]));
+
+        let mut calls = 0;
+        let failed = get_json_within(Instant::now() + Duration::from_secs(30), |_| {
+            calls += 1;
+            Err(cut())
+        });
+        assert_eq!(calls, GET_TRIES);
+        let failed = get_error(failed.unwrap_err());
+        assert!(interrupted(&failed), "{failed:?}");
+        assert!(failed.remediation.as_deref().is_some_and(|r| r.contains("reading is safe")), "{failed:?}");
+        assert!(!failed.remediation.as_deref().unwrap_or_default().contains("billed"), "{failed:?}");
+
+        let mut calls = 0;
+        let failed = get_json_within(Instant::now() + Duration::from_secs(30), |_| {
+            calls += 1;
+            Err(net_error("Ollama", "http://127.0.0.1:11434/v1/models", ureq::Error::ConnectionFailed))
+        });
+        assert_eq!(calls, 1);
+        assert_eq!(failed.unwrap_err().code, ErrorCode::EngineMissing);
     }
 
     /// #1239: an answer that never started (a server busy with another tool's work) says which
