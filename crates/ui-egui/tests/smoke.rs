@@ -819,6 +819,50 @@ fn the_builders_questions_can_come_to_the_person_for_one_project() {
     assert!(h.state().settings.auto_mode, "Auto mode itself is unchanged");
 }
 
+/// #2435: the Approvals link sat right under Send, so a click a little low opened Approvals.
+/// It sits at the other end of the row, clear of Send, at the smallest window, a normal one and
+/// a high zoom; the row holds still frame after frame, and the link still opens its menu.
+#[test]
+fn the_approvals_link_is_clear_of_send() {
+    use craft_anything_engine::workspace::{TargetRef, Workspace};
+    // The smallest window the app allows, a normal one, and that at the highest zoom (640 points
+    // wide, so the switches take two rows). The smallest at 200% leaves the row below the window.
+    for (size, zoom) in [((760.0, 520.0), 1.0), ((1280.0, 820.0), 1.0), ((1280.0, 820.0), 2.0)] {
+        let d = tempfile::tempdir().unwrap();
+        let ws = Workspace::create(d.path(), "Notes", "A notes app", TargetRef::None).unwrap();
+        let mut h = harness_sized(egui::vec2(size.0, size.1), move || {
+            let mut a = demo::app(demo::engine(Mode::Beginner, true));
+            a.workspace = Some(ws);
+            a.state.screen = Screen::Project;
+            a
+        });
+        h.ctx.set_zoom_factor(zoom);
+        h.run_steps(4);
+        let at = |h: &Harness<'static, CraftApp>| (h.get_by_label("Send (Enter)").rect(), h.get_by_label("Approvals").rect());
+        let (send, approvals) = at(&h);
+        let case = format!("{size:?} at {zoom}x: Send {send:?}, Approvals {approvals:?}");
+        // Not under Send or near it: a clear gap between them across the row.
+        let gap = (send.left() - approvals.right()).max(approvals.left() - send.right());
+        assert!(gap >= 48.0, "Approvals is {gap} pt from Send, {case}");
+        // The prompt box and the row under it hold still over several frames.
+        for _ in 0..6 {
+            h.run_steps(1);
+            let (s, a) = at(&h);
+            assert!((s.min - send.min).length() < 0.5 && (a.min - approvals.min).length() < 0.5, "moved to {s:?} and {a:?}, {case}");
+        }
+        // A click opens the menu, and so does Enter once it has the keyboard's focus.
+        if zoom == 1.0 && size.0 > 1000.0 {
+            h.get_by_label("Approvals").focus();
+            h.run_steps(1);
+            h.key_press(egui::Key::Enter);
+        } else {
+            h.get_by_label("Approvals").click();
+        }
+        h.run_steps(2);
+        assert!(egui::Popup::is_id_open(&h.ctx, egui::Id::new("project-approvals")), "the menu opened, {case}");
+    }
+}
+
 #[test]
 fn approvals_are_chosen_from_the_prompt_box_and_its_menu() {
     use craft_anything_engine::workspace::{ActionKind, Approval, TargetRef, Workspace};
