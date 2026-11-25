@@ -1122,6 +1122,9 @@ impl Worker {
             let checking = if ws.manifest.target == TargetRef::None { "Checking the build…" } else { "Checking the build against the original…" };
             self.step(ws, Step::Check, Status::Checking, checking)?;
             let checks = self.checks_with_a_retry(ws, kind, round)?;
+            // A pause the last check didn't notice, or took for a failure: the round doesn't count,
+            // and the build still awaits its check (#2430).
+            self.stop.check()?;
             ws.manifest.checks.extend(checks.iter().cloned());
             ws.manifest.awaiting_check = false;
             // A round in which every check works (built and served) ends the streak; any other
