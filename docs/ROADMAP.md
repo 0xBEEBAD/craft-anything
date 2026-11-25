@@ -770,7 +770,9 @@ Owner: open · Status: todo
       failure before anything was sent (refused or failed connection, host not found, connect or
       resolve timeout) still says "Couldn't reach"; every later failure says it may be billed,
       points at the dashboard, and isn't retried. A generated file that can't be downloaded after
-      that also says it was paid for, gives its address, and isn't retried
+      that also says it was paid for, gives its address, and isn't retried. A 3D model rate-limited
+      after its picture was made says the picture is saved and paid for, and gives its `app/` path
+      as `image` so a retry doesn't pay for another picture
       — claimed: AlexJoaquimPereira, branch bugfix/r5.5-fal-generation-timeout
 - [ ] A paid generation that may have been billed isn't counted against the project's asset budget,
       because cost is recorded only when the file is saved: charge the estimate when the POST may

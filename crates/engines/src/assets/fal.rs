@@ -120,7 +120,8 @@ impl Fal {
             404 => Err(ToolError::new(ErrorCode::BadSettings, format!("fal.ai didn't find the model ({status}): {detail}"))
                 .with_remediation("Check the model in Settings → AI → Game assets.")),
             429 => Err(ToolError::new(ErrorCode::OverLimit, format!("fal.ai is rate limiting the generation ({status}): {detail}"))
-                .with_remediation("Wait a moment, then try again.")),
+                .with_remediation("Wait a moment, then try again.")
+                .with_details(json!({"status": 429}))),
             300..=399 => Err(Fal::billed_status_error(ErrorCode::ProgramFailed, format!("fal.ai redirected the generation request ({status}): {detail}"))),
             408 | 504 => Err(Fal::billed_status_error(ErrorCode::TimedOut, format!("fal.ai didn't answer in time ({status}): {detail}"))),
             500..=599 => Err(Fal::billed_status_error(ErrorCode::EngineMissing, format!("fal.ai failed while answering ({status}): {detail}"))),
