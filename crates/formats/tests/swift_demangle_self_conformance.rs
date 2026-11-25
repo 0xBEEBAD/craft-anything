@@ -49,4 +49,5 @@ fn malformed_operands_are_invalid() {
     invalid("_$syTS");
     invalid("_$s3FooTS");
     invalid("_$sSiWS");
+    invalid("_$sSiMaTS");
 }

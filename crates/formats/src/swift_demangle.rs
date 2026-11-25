@@ -1651,6 +1651,7 @@ impl<'a> D<'a> {
                                 | N::Private(_)
                                 | N::Operator(_)
                                 | N::Module(_)
+                                | N::Global { .. }
                         )
                     )
                 {
