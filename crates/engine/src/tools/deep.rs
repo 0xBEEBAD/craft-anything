@@ -14,7 +14,7 @@ use crate::settings::Settings;
 use crate::tool::{Ctx, ToolOutput};
 use crate::workspace::MANIFEST;
 use craft_anything_engines::ghidra::{self, DeepDecompiler, DeepFunction};
-use craft_anything_evidence::{Confidence, Environment, EvidenceBuilder, Limitation, Location, ToolError, host_triple};
+use craft_anything_evidence::{Confidence, Environment, ErrorCode, EvidenceBuilder, Limitation, Location, ToolError, host_triple};
 use craft_anything_platform::sync::Mutex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -34,12 +34,91 @@ pub struct LanguageOverride(pub String);
 
 /// Cached decision for one target: a live provider, or why there isn't one.
 struct DeepSlot {
-    provider: Result<Arc<dyn DeepDecompiler>, String>,
+    provider: Result<Arc<dyn DeepDecompiler>, NotUsed>,
+}
+
+/// Why Deep mode's engine gave no answer, as a typed, machine-readable reason (#2209). Serialized
+/// in snake case under `deep_engine_unavailable.reason` in a fallback's result and error details.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Unavailable {
+    /// Deep mode is on but Ghidra isn't installed.
+    NotInstalled,
+    /// The program's bytes aren't loaded, so there was nothing to give Ghidra.
+    NoBytes,
+    /// Ghidra was stopped before it was ready.
+    Stopped,
+    /// Ghidra couldn't import the program or its headless analyzer didn't start.
+    OpenFailed,
+    /// Ghidra opened the program but has no function at this address and couldn't make one.
+    NoFunction,
+    /// Ghidra answered with no pseudo-C for the function.
+    NoAnswer,
+    /// Ghidra opened the program but decompiling this function failed.
+    DecompileFailed,
+}
+
+impl Unavailable {
+    /// A few plain words for the engine label of a fallback answer.
+    pub fn short(self) -> &'static str {
+        match self {
+            Unavailable::NotInstalled => "Ghidra isn't installed",
+            Unavailable::NoBytes => "the program's bytes aren't loaded",
+            Unavailable::Stopped => "Ghidra was stopped",
+            Unavailable::OpenFailed => "Ghidra couldn't open this program",
+            Unavailable::NoFunction => "Ghidra has no function here",
+            Unavailable::NoAnswer => "Ghidra had no answer",
+            Unavailable::DecompileFailed => "Ghidra couldn't decompile this function",
+        }
+    }
+
+    /// Whether Ghidra itself failed (rather than answering that there is no function there).
+    pub fn is_failure(self) -> bool {
+        !matches!(self, Unavailable::NoFunction | Unavailable::NoAnswer)
+    }
+
+    /// The error code for a request that only Ghidra could have answered.
+    pub fn error_code(self) -> ErrorCode {
+        match self {
+            Unavailable::NotInstalled | Unavailable::OpenFailed => ErrorCode::EngineMissing,
+            Unavailable::NoBytes => ErrorCode::FeatureMissing,
+            Unavailable::Stopped => ErrorCode::Cancelled,
+            Unavailable::DecompileFailed => ErrorCode::ProgramFailed,
+            Unavailable::NoFunction | Unavailable::NoAnswer => ErrorCode::NotFound,
+        }
+    }
+}
+
+/// Deep mode was asked for and Ghidra wasn't used: the typed reason and what to say about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotUsed {
+    pub reason: Unavailable,
+    /// Says only why Ghidra wasn't used; the caller adds what it did instead.
+    pub message: String,
+}
+
+impl NotUsed {
+    fn new(reason: Unavailable, message: impl Into<String>) -> Self {
+        NotUsed { reason, message: message.into() }
+    }
+
+    /// The limitation and result field code, the same everywhere a Deep request falls back.
+    pub const CODE: &'static str = "deep_engine_unavailable";
+
+    /// The engine label of an answer the built-in lifter gave instead of Ghidra.
+    pub fn engine_label(&self) -> String {
+        format!("clean-room lifter (Deep mode fallback: {})", self.reason.short())
+    }
+
+    /// The machine-readable record of the fallback, for results and error details.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({"requested": true, "engine": "ghidra", "reason": self.reason, "message": self.message})
+    }
 }
 
 #[cfg(test)]
 struct TestProviderStart {
-    result: Result<Arc<dyn DeepDecompiler>, Option<String>>,
+    result: Result<Arc<dyn DeepDecompiler>, Option<NotUsed>>,
     delay: Duration,
     calls: AtomicUsize,
 }
@@ -58,7 +137,7 @@ pub const STOPPED_NOTE: &str = "The person stopped Ghidra's analysis for this pr
 /// Get (or lazily create) the deep provider for the active target. `Err(Some(why))`: Deep mode is
 /// on but Ghidra can't be used; `Err(None)`: Clean room (never launches). Either way the caller
 /// uses the built-in engine.
-pub(super) fn provider_for_active(ctx: &mut Ctx<'_>) -> Result<Arc<dyn DeepDecompiler>, Option<String>> {
+pub(super) fn provider_for_active(ctx: &mut Ctx<'_>) -> Result<Arc<dyn DeepDecompiler>, Option<NotUsed>> {
     if ctx.session.clean_room() {
         return Err(None);
     }
@@ -72,7 +151,7 @@ pub(super) fn provider_for_active(ctx: &mut Ctx<'_>) -> Result<Arc<dyn DeepDecom
         if let Ok(t) = ctx.session.active_mut() {
             t.ext.remove::<DeepSlot>();
         }
-        return Err(Some(STOPPED_NOTE.into()));
+        return Err(Some(NotUsed::new(Unavailable::Stopped, STOPPED_NOTE)));
     }
     // Already decided for this target?
     if let Ok(t) = ctx.session.active()
@@ -97,14 +176,14 @@ pub(super) fn provider_for_active(ctx: &mut Ctx<'_>) -> Result<Arc<dyn DeepDecom
         Err(_) => return Err(None),
     };
     if bytes.is_empty() {
-        return remember(ctx, Err("Ghidra needs the program's bytes, which aren't loaded, so the built-in decompiler was used.".into()));
+        return remember(ctx, Err(NotUsed::new(Unavailable::NoBytes, "Ghidra needs the program's bytes, which aren't loaded.")));
     }
 
     // A per-target language override (from core_target_open) wins over the global setting.
     let language = ctx.session.active().ok().and_then(|t| t.ext.get::<LanguageOverride>().map(|o| o.0.clone()));
     // Not remembered: once the person installs Ghidra, the next call uses it.
     let Some((cfg, digest)) = config(&ctx.session.settings, language) else {
-        return Err(Some(NOT_INSTALLED.into()));
+        return Err(Some(NotUsed::new(Unavailable::NotInstalled, NOT_INSTALLED)));
     };
     let cancel = ctx.cancel.clone();
     let cancel_fn = move || cancel.is_cancelled() || workspace.as_deref().is_some_and(stopped);
@@ -114,10 +193,10 @@ pub(super) fn provider_for_active(ctx: &mut Ctx<'_>) -> Result<Arc<dyn DeepDecom
     match ghidra::Session::start(&cfg, bytes.as_ref(), &sha256, &digest, &cancel_fn, &report) {
         Ok(session) => remember(ctx, Ok(Arc::new(session))),
         // Stopped by the caller: try again next time rather than remembering a failure.
-        Err(ghidra::GhidraError::Cancelled) => Err(Some("Ghidra was stopped before it was ready.".into())),
+        Err(ghidra::GhidraError::Cancelled) => Err(Some(NotUsed::new(Unavailable::Stopped, "Ghidra was stopped before it was ready."))),
         Err(e) => {
             log::warn!("Deep mode (Ghidra) unavailable; using the built-in engine: {e}");
-            remember(ctx, Err(format!("Ghidra couldn't open this program ({e}).")))
+            remember(ctx, Err(NotUsed::new(Unavailable::OpenFailed, format!("Ghidra couldn't open this program ({e})."))))
         }
     }
 }
@@ -342,7 +421,7 @@ pub fn stop_analyses(within: Duration) {
     CLOSING.store(false, Ordering::SeqCst);
 }
 
-fn remember(ctx: &mut Ctx<'_>, provider: Result<Arc<dyn DeepDecompiler>, String>) -> Result<Arc<dyn DeepDecompiler>, Option<String>> {
+fn remember(ctx: &mut Ctx<'_>, provider: Result<Arc<dyn DeepDecompiler>, NotUsed>) -> Result<Arc<dyn DeepDecompiler>, Option<NotUsed>> {
     if let Ok(t) = ctx.session.active_mut() {
         t.ext.insert(Arc::new(DeepSlot { provider: provider.clone() }));
     }
@@ -362,8 +441,8 @@ pub enum At {
 /// base the built-in engine reads the program at; Ghidra may have loaded it elsewhere (a
 /// position-independent ELF goes to 0x100000), so addresses are moved between the two.
 /// `Err(why)` → the caller uses the built-in lifter and passes on why Ghidra wasn't used (`None`
-/// in Clean room). `Ok(Err(..))` only for a cancellation the caller should surface.
-pub fn pseudo_code(ctx: &mut Ctx<'_>, at: At, our_base: u64, params: serde_json::Value) -> Result<Result<ToolOutput, ToolError>, Option<String>> {
+/// in Clean room), with a typed reason to put on its answer. `Ok(Err(..))` only for a cancellation the caller should surface.
+pub fn pseudo_code(ctx: &mut Ctx<'_>, at: At, our_base: u64, params: serde_json::Value) -> Result<Result<ToolOutput, ToolError>, Option<NotUsed>> {
     let provider = provider_for_active(ctx)?;
     let rebase = ghidra::Rebase::new(our_base, provider.image_base());
     let entry = match at {
@@ -380,12 +459,13 @@ pub fn pseudo_code(ctx: &mut Ctx<'_>, at: At, our_base: u64, params: serde_json:
             a.say(line);
         }
     };
-    match provider.decompile(entry, &waiting) {
+    let cancel = ctx.cancel.clone();
+    match provider.decompile(entry, &|| cancel.is_cancelled(), &waiting) {
         Ok(Some(df)) => {
             let renames = user_renames(ctx, rebase);
             Ok(build_evidence(ctx, provider.as_ref(), df, rebase, &renames, params))
         }
-        Ok(None) => Err(Some("Ghidra had no answer for this function.".into())),
+        Ok(None) => Err(Some(NotUsed::new(Unavailable::NoAnswer, "Ghidra had no answer for this function."))),
         Err(ghidra::GhidraError::Cancelled) => Ok(Err(ToolError::cancelled())),
         Err(e) => {
             log::warn!("Ghidra decompile failed; falling back to the built-in engine: {e}");
@@ -400,9 +480,9 @@ pub fn pseudo_code(ctx: &mut Ctx<'_>, at: At, our_base: u64, params: serde_json:
                 // The bridge looks up the function containing the address and, when its analysis
                 // has none, tries to make one there; the message says why it couldn't.
                 ghidra::GhidraError::Bridge { ref code, ref message } if code == "not_found" => {
-                    format!("Ghidra's analysis has no function at this address and it couldn't make one: {message}.")
+                    NotUsed::new(Unavailable::NoFunction, format!("Ghidra's analysis has no function at this address and it couldn't make one: {message}."))
                 }
-                e => format!("Ghidra couldn't decompile this function ({e})."),
+                e => NotUsed::new(Unavailable::DecompileFailed, format!("Ghidra couldn't decompile this function ({e}).")),
             }))
         }
     }
@@ -669,7 +749,7 @@ mod tests {
         fn image_base(&self) -> Option<u64> {
             Some(self.base)
         }
-        fn decompile(&self, entry: u64, _: &dyn Fn(&str)) -> Result<Option<DeepFunction>, ghidra::GhidraError> {
+        fn decompile(&self, entry: u64, _: &dyn Fn() -> bool, _: &dyn Fn(&str)) -> Result<Option<DeepFunction>, ghidra::GhidraError> {
             self.asked.store(entry, Ordering::SeqCst);
             if entry < self.base {
                 return Err(ghidra::GhidraError::Bridge { code: "not_found".into(), message: "the address is not in executable memory".into() });
@@ -726,7 +806,7 @@ mod tests {
         fn image_base(&self) -> Option<u64> {
             Some(tk::ELF_BASE)
         }
-        fn decompile(&self, entry: u64, waiting: &dyn Fn(&str)) -> Result<Option<DeepFunction>, ghidra::GhidraError> {
+        fn decompile(&self, entry: u64, _: &dyn Fn() -> bool, waiting: &dyn Fn(&str)) -> Result<Option<DeepFunction>, ghidra::GhidraError> {
             waiting("Ghidra is decompiling this function (1 min so far; it gives up at 15 min)");
             *self.seen.lock().unwrap() = crate::inbox::activity(&self.inbox);
             Ok(Some(DeepFunction { entry, name: "main".into(), signature: None, pseudocode: Some("int main(void) { return 0; }".into()), created: false }))
@@ -773,7 +853,7 @@ mod tests {
         fn image_base(&self) -> Option<u64> {
             Some(tk::ELF_BASE)
         }
-        fn decompile(&self, entry: u64, _: &dyn Fn(&str)) -> Result<Option<DeepFunction>, ghidra::GhidraError> {
+        fn decompile(&self, entry: u64, _: &dyn Fn() -> bool, _: &dyn Fn(&str)) -> Result<Option<DeepFunction>, ghidra::GhidraError> {
             let pseudocode = Some(
                 "int main(void) {
   return helper(5) + helper_count + my_helper();
@@ -803,6 +883,7 @@ mod tests {
         InvalidProtocol,
         CancelSecond,
         StopSecond(crate::tool::CancelToken),
+        WaitSecond { started: std::sync::mpsc::Sender<()>, release: Arc<AtomicBool> },
     }
 
     struct ExportProvider {
@@ -828,7 +909,7 @@ mod tests {
         fn image_base(&self) -> Option<u64> {
             Some(tk::ELF_BASE + EXPORT_SHIFT)
         }
-        fn decompile(&self, entry: u64, _: &dyn Fn(&str)) -> Result<Option<DeepFunction>, ghidra::GhidraError> {
+        fn decompile(&self, entry: u64, cancel: &dyn Fn() -> bool, _: &dyn Fn(&str)) -> Result<Option<DeepFunction>, ghidra::GhidraError> {
             let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
             match &self.reply {
                 ExportReply::NoFunction => return Ok(None),
@@ -839,6 +920,15 @@ mod tests {
                 ExportReply::InvalidProtocol => return Err(ghidra::GhidraError::Protocol("fixture bridge sent invalid data".into())),
                 ExportReply::CancelSecond if call == 2 => return Err(ghidra::GhidraError::Cancelled),
                 ExportReply::StopSecond(token) if call == 2 => token.cancel(),
+                ExportReply::WaitSecond { started, release } if call == 2 => {
+                    let _ = started.send(());
+                    while !release.load(Ordering::SeqCst) {
+                        if cancel() {
+                            return Err(ghidra::GhidraError::Cancelled);
+                        }
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                }
                 _ => {}
             }
             let name = format!("FUN_{entry:08x}");
@@ -1025,7 +1115,11 @@ mod tests {
     fn source_folder_checks_an_unavailable_installation_once_per_call() {
         let (elf, _) = tk::elf64(tk::ElfArch::X86_64, true);
         let e = engine_with("prog", &elf);
-        let start = Arc::new(TestProviderStart { result: Err(Some(NOT_INSTALLED.into())), delay: Duration::ZERO, calls: AtomicUsize::new(0) });
+        let start = Arc::new(TestProviderStart {
+            result: Err(Some(NotUsed::new(Unavailable::NotInstalled, NOT_INSTALLED))),
+            delay: Duration::ZERO,
+            calls: AtomicUsize::new(0),
+        });
         {
             let mut session = e.session();
             session.settings.deep_mode = true;
@@ -1077,6 +1171,59 @@ mod tests {
     }
 
     #[test]
+    fn source_folder_cancels_an_in_flight_decompile_and_can_resume() {
+        let (elf, _) = tk::elf64(tk::ElfArch::X86_64, true);
+        for cached in [false, true] {
+            let e = engine_with("prog", &elf);
+            let token = crate::tool::CancelToken::default();
+            let (started, waiting) = std::sync::mpsc::channel();
+            let (finished, done) = std::sync::mpsc::channel();
+            let release = Arc::new(AtomicBool::new(false));
+            let provider = ExportProvider::new(ExportReply::WaitSecond { started, release: release.clone() });
+            if cached {
+                with_deep(&e, provider);
+            } else {
+                let start = Arc::new(TestProviderStart { result: Ok(provider), delay: Duration::ZERO, calls: AtomicUsize::new(0) });
+                let mut session = e.session();
+                session.settings.deep_mode = true;
+                session.active_mut().unwrap().ext.insert(start);
+            }
+            let tmp = tempfile::tempdir().unwrap();
+            let folder = tmp.path().join("out");
+            std::thread::scope(|scope| {
+                let worker = scope.spawn(|| {
+                    let result =
+                        e.call("native_source_folder_write", json!({"folder": folder}), crate::CallOptions::new(crate::Caller::Mcp).with_cancel(token.clone()));
+                    let _ = finished.send(());
+                    result
+                });
+                let entered = waiting.recv_timeout(Duration::from_secs(5));
+                token.cancel();
+                let cancelled_while_waiting = done.recv_timeout(Duration::from_secs(5));
+                // Release and join even when cancellation was not forwarded. The negative
+                // control must finish before asserting, rather than leave a blocked provider.
+                release.store(true, Ordering::SeqCst);
+                let result = worker.join().expect("export worker");
+                assert!(entered.is_ok(), "the second decompile did not start (cached={cached})");
+                assert!(cancelled_while_waiting.is_ok(), "the export waited for the decompile to return (cached={cached})");
+                assert_eq!(result.unwrap_err().code, craft_anything_evidence::ErrorCode::Cancelled);
+            });
+
+            let state = export_state(&folder);
+            let functions = state["functions"].as_object().unwrap();
+            assert_eq!(functions.len(), 1, "save the first function but not the in-flight one");
+            assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 2, "one code file and its resumable state");
+            let first = folder.join(functions.values().next().unwrap()["file"].as_str().unwrap());
+            let before = std::fs::read(&first).unwrap();
+            with_deep(&e, ExportProvider::new(ExportReply::Code));
+            let resumed = call(&e, "native_source_folder_write", json!({"folder": folder}));
+            assert_eq!(resumed["result"]["already_done"], 1);
+            assert_eq!(resumed["result"]["finished"], true);
+            assert_eq!(std::fs::read(first).unwrap(), before);
+        }
+    }
+
+    #[test]
     fn source_folder_does_not_decompile_when_no_function_can_start() {
         let (elf, _) = tk::elf64(tk::ElfArch::X86_64, true);
         let e = engine_with("prog", &elf);
@@ -1106,7 +1253,7 @@ mod tests {
             fn engine_version(&self) -> Option<String> {
                 None
             }
-            fn decompile(&self, _: u64, _: &dyn Fn(&str)) -> Result<Option<DeepFunction>, ghidra::GhidraError> {
+            fn decompile(&self, _: u64, _: &dyn Fn() -> bool, _: &dyn Fn(&str)) -> Result<Option<DeepFunction>, ghidra::GhidraError> {
                 Ok(None)
             }
             fn list_functions(&self) -> Result<Vec<DeepFunction>, ghidra::GhidraError> {
@@ -1239,7 +1386,7 @@ mod tests {
         fn image_base(&self) -> Option<u64> {
             Some(tk::ELF_BASE)
         }
-        fn decompile(&self, entry: u64, _: &dyn Fn(&str)) -> Result<Option<DeepFunction>, ghidra::GhidraError> {
+        fn decompile(&self, entry: u64, _: &dyn Fn() -> bool, _: &dyn Fn(&str)) -> Result<Option<DeepFunction>, ghidra::GhidraError> {
             let pseudocode = Some("int sub_parse(void) { return 0; }".into());
             Ok(Some(DeepFunction { entry, name: "sub_parse".into(), signature: None, pseudocode, created: false }))
         }
@@ -1301,5 +1448,115 @@ mod tests {
         assert_eq!(r["result"]["entry"], format!("{:#x}", l.code_va));
         assert!(r["result"].get("engine_entry").is_none(), "{r}");
         assert!(!r["limitations"].as_array().unwrap().iter().any(|x| x["code"] == "engine_rebased"));
+    }
+
+    /// A deep engine whose every decompile fails the same way.
+    struct Failing(fn() -> ghidra::GhidraError);
+
+    impl DeepDecompiler for Failing {
+        fn engine(&self) -> &'static str {
+            "ghidra"
+        }
+        fn engine_version(&self) -> Option<String> {
+            Some("test".into())
+        }
+        fn image_base(&self) -> Option<u64> {
+            Some(tk::ELF_BASE)
+        }
+        fn decompile(&self, _: u64, _: &dyn Fn() -> bool, _: &dyn Fn(&str)) -> Result<Option<DeepFunction>, ghidra::GhidraError> {
+            Err((self.0)())
+        }
+        fn list_functions(&self) -> Result<Vec<DeepFunction>, ghidra::GhidraError> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// Deep mode with Ghidra already known not to open this target, as a failed import leaves it.
+    fn with_failed_open(e: &crate::Engine, message: &str) {
+        let mut s = e.session();
+        s.settings.deep_mode = true;
+        s.active_mut().unwrap().ext.insert(Arc::new(DeepSlot { provider: Err(NotUsed::new(Unavailable::OpenFailed, message)) }));
+    }
+
+    /// The built-in answer to a Deep request says, in its engine, summary, result and
+    /// limitations, that Ghidra was tried and why it gave nothing.
+    fn assert_fallback(r: &serde_json::Value, reason: &str, says: &str) {
+        let engine = r["result"]["engine"].as_str().unwrap();
+        assert!(engine.starts_with("clean-room lifter (Deep mode fallback: "), "{engine}");
+        let field = &r["result"]["deep_engine_unavailable"];
+        assert_eq!(field["reason"], reason, "{r}");
+        assert_eq!(field["requested"], true);
+        assert!(field["message"].as_str().unwrap().contains(says), "{field}");
+        let summary = r["summary"].as_str().unwrap();
+        assert!(summary.contains("Deep mode was on but Ghidra wasn't used") && summary.contains("built-in decompiler"), "{summary}");
+        let l = r["limitations"].as_array().unwrap().iter().find(|l| l["code"] == "deep_engine_unavailable").expect("limitation");
+        assert!(l["message"].as_str().unwrap().contains(says), "{l}");
+        assert_eq!(r["environment"]["engine"], "builtin");
+    }
+
+    /// #2209: Ghidra couldn't import the program (or its headless analyzer didn't start). The
+    /// built-in answer is labelled as a fallback with the reason, and an address only Ghidra
+    /// could have placed fails with Ghidra's failure as the cause, not just "no function".
+    #[test]
+    fn a_failed_ghidra_import_is_named_on_the_fallback_and_on_the_error() {
+        let (elf, _) = tk::elf64(tk::ElfArch::X86_64, true);
+        let e = engine_with("prog", &elf);
+        let open = "Ghidra couldn't open this program (could not start Ghidra: No load spec found for import file: target-1).";
+        with_failed_open(&e, open);
+        let r = call(&e, "native_function_pseudocode", json!({"function": "main"}));
+        assert_fallback(&r, "open_failed", "No load spec found");
+        assert_eq!(r["result"]["engine"], "clean-room lifter (Deep mode fallback: Ghidra couldn't open this program)");
+
+        let err = call_err(&e, "native_function_pseudocode", json!({"function": "0x7fff0000"}));
+        assert!(err.message.starts_with("Ghidra couldn't open this program (could not start Ghidra: No load spec found"), "{}", err.message);
+        assert!(err.message.contains("no function named or at"), "{}", err.message);
+        assert_eq!(err.code, ErrorCode::EngineMissing);
+        let details = err.details.unwrap();
+        assert_eq!(details["reason"], "deep_engine_unavailable");
+        assert_eq!(details["deep_engine_unavailable"]["reason"], "open_failed");
+        assert_eq!(details["function"], "0x7fff0000");
+        assert!(err.remediation.unwrap_or_default().contains("native_function_find"));
+    }
+
+    /// Ghidra opened the program but has no function at the address: the built-in answer still
+    /// says so, and for an address neither engine knows it stays a "no function" error, with
+    /// Ghidra's answer as the hint and the typed reason in the details.
+    #[test]
+    fn ghidra_having_no_function_is_named_on_the_fallback_and_the_error() {
+        let (elf, _) = tk::elf64(tk::ElfArch::X86_64, true);
+        let e = engine_with("prog", &elf);
+        with_deep(&e, Arc::new(Failing(|| ghidra::GhidraError::Bridge { code: "not_found".into(), message: "no code there".into() })));
+        let r = call(&e, "native_function_pseudocode", json!({"function": "main"}));
+        assert_fallback(&r, "no_function", "no code there");
+
+        let err = call_err(&e, "native_function_pseudocode", json!({"function": "FUN_7fff0000"}));
+        assert!(err.message.starts_with("No function named or at"), "{}", err.message);
+        assert!(err.remediation.unwrap_or_default().starts_with("Ghidra's analysis has no function at this address"));
+        assert_eq!(err.details.unwrap()["deep_engine_unavailable"]["reason"], "no_function");
+    }
+
+    /// A decompile that fails in the bridge falls back with that reason, and the dead bridge is
+    /// forgotten so the next call starts it again.
+    #[test]
+    fn a_failed_decompile_is_named_on_the_fallback() {
+        let (elf, _) = tk::elf64(tk::ElfArch::X86_64, true);
+        let e = engine_with("prog", &elf);
+        with_deep(&e, Arc::new(Failing(|| ghidra::GhidraError::Connection("the bridge closed".into()))));
+        let r = call(&e, "native_function_pseudocode", json!({"function": "main"}));
+        assert_fallback(&r, "decompile_failed", "the bridge closed");
+        assert!(e.session().active().unwrap().ext.get::<DeepSlot>().is_none(), "a dead bridge is started again next time");
+    }
+
+    /// Without Deep mode nothing about Ghidra is added (Clean room refuses the tool anyway; this
+    /// is the engine's answer with Deep mode on and Ghidra answering).
+    #[test]
+    fn a_ghidra_answer_carries_no_fallback_field() {
+        let (elf, _) = tk::elf64(tk::ElfArch::X86_64, true);
+        let e = engine_with("prog", &elf);
+        with_deep(&e, Arc::new(Symbols));
+        let r = call(&e, "native_function_pseudocode", json!({"function": "main"}));
+        assert_eq!(r["environment"]["engine"], "ghidra", "{r}");
+        assert!(r["result"].get("deep_engine_unavailable").is_none(), "{r}");
+        assert!(!r["limitations"].as_array().unwrap().iter().any(|l| l["code"] == "deep_engine_unavailable"));
     }
 }

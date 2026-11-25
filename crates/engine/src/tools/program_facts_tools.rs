@@ -1178,7 +1178,7 @@ fn native_source_folder_write(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOu
                 save_export_state(&folder, &state)?;
                 return Err(e);
             }
-            Err(why) => (None, why),
+            Err(why) => (None, why.map(|why| why.message)),
         };
         let mut code = deep_code.unwrap_or_else(|| {
             let ps = lift(&st.img, &st.prog, f, &names);
