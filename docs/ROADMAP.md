@@ -1116,6 +1116,19 @@ Owner: open · Status: in progress
 - [ ] More pins once their hashes are checked against the publisher: Chromium (no published
       checksums found yet), Rizin for Linux (the tar.xz unpacks to ~800 MB, so it needs streaming
       extraction) and macOS (a .pkg)
+- [x] Use the memory set for Ghidra (`engines.ghidra.memory_gb`, Settings → Engines) below 4 GB too:
+      a set amount was raised to the automatic amount's floor of 4 GB, so a 1-3 GB setting always
+      started Ghidra with `-Xmx4G` (#2425). A set amount is now kept within 1-31 GB
+      (`ghidra::SET_HEAP_GB`); the 4-31 GB range is for the automatic amount only. Both starts (the
+      analysis and the bridge) take it from one place; tested with a stand-in launcher that records
+      `GHIDRA_HEADLESS_MAXMEM`, not run with a real Ghidra
+      (claimed: ilijachrchev, branch bugfix/2425-ghidra-memory)
+- [ ] Ghidra before 12.1 ignores the memory setting: its `support/analyzeHeadless` fixes `MAXMEM=2G`
+      and reads no variable (checked in Ghidra's published 11.0, 11.4, 11.4.2, 12.0 and 12.0.4
+      launchers; 12.1 and 12.1.4 read `GHIDRA_HEADLESS_MAXMEM`). Say so when an older Ghidra is in
+      use, or start it another way that takes a heap
+- [ ] Live check of #2425 with a real Ghidra 12.1.4 or 12.2: `memory_gb = 1` gives `-Xmx1G` for the
+      analysis and the bridge
 
 ### R1.6 Headless first
 Owner: maintainers · Status: in progress
