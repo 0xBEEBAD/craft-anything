@@ -64,14 +64,17 @@ fn net_error(what: &str, url: &str, e: ureq::Error) -> ToolError {
     }
     let local = is_this_computer(url);
     const LONGER: &str = "To wait longer, set timeout_secs (in seconds) for this AI under [[ai.backends]] in config.toml; the wait is five minutes unless set.";
-    if matches!(e, ureq::Error::Timeout(ureq::Timeout::RecvResponse)) {
+    if matches!(e, ureq::Error::Timeout(ureq::Timeout::RecvResponse | ureq::Timeout::Global | ureq::Timeout::PerCall)) {
         let why = if local {
             "A large model may still be loading, or reading a long prompt: a smaller context length in the server's settings makes both faster."
         } else {
             "A server busy with another tool's work may need longer."
         };
-        // `reached`: the server took the request, so its address is right (#1429).
-        return ToolError::new(ErrorCode::TimedOut, format!("{what} took the request but didn't start answering in time."))
+        // `reached`: the server took the request, so its address is right (#1429). The phase
+        // timeouts fire before the global cap when opening the connection is the problem.
+        let answer =
+            if matches!(e, ureq::Error::Timeout(ureq::Timeout::RecvResponse)) { "didn't start answering in time" } else { "didn't finish answering in time" };
+        return ToolError::new(ErrorCode::TimedOut, format!("{what} took the request but {answer}."))
             .with_remediation(format!("{why} {LONGER}"))
             .with_details(serde_json::json!({ "reached": true }));
     }
@@ -242,7 +245,7 @@ const GET_TRIES: u32 = 3;
 /// GET JSON. A GET is safe to repeat, unlike a POST that may already be billed, so a call cut
 /// short by a signal on this computer is simply made again within `deadline`.
 pub fn get_json(agent: &ureq::Agent, what: &str, url: &str, headers: &[(&str, String)], deadline: Instant) -> Result<Value, ToolError> {
-    get_json_within(deadline, |_| get_json_once(agent, what, url, headers)).map_err(get_error)
+    get_json_within(deadline, |left| get_json_once(agent, what, url, headers, left)).map_err(get_error)
 }
 
 /// The retry loop `get_json` uses, with the call separate so a test can cut it short.
@@ -250,9 +253,21 @@ fn get_json_within(deadline: Instant, call: impl FnMut(Duration) -> Result<Value
     retry::when_interrupted(GET_TRIES, deadline, call, interrupted)
 }
 
-/// One GET attempt. The agent's own timeouts bound it; a retry only starts while time is left.
-fn get_json_once(agent: &ureq::Agent, what: &str, url: &str, headers: &[(&str, String)]) -> Result<Value, ToolError> {
-    let mut req = agent.get(url);
+/// One GET attempt, with every phase bounded by the time left so a retry stays inside the caller's
+/// deadline. The phase timeouts keep their own kind (a reached-but-slow server still says so); the
+/// global timeout is a hair later so it only caps the whole attempt.
+fn get_json_once(agent: &ureq::Agent, what: &str, url: &str, headers: &[(&str, String)], left: Duration) -> Result<Value, ToolError> {
+    let mut req = agent
+        .get(url)
+        .config()
+        .timeout_resolve(Some(left))
+        .timeout_connect(Some(attempt_connect(agent, left)))
+        .timeout_recv_response(Some(left))
+        .timeout_recv_body(Some(left))
+        // One connect's worth of slack lets the phase timeout be reported (a reached-but-slow
+        // server still says so); the global cap only stops a phase from running past the budget.
+        .timeout_global(Some(left.saturating_mul(2).saturating_add(Duration::from_millis(1))))
+        .build();
     for (k, v) in headers {
         req = req.header(*k, v.as_str());
     }
@@ -263,6 +278,13 @@ fn get_json_once(agent: &ureq::Agent, what: &str, url: &str, headers: &[(&str, S
         return Err(status_error(what, status, &text));
     }
     serde_json::from_str(&text).map_err(|e| ToolError::new(ErrorCode::GarbledOutput, format!("{what} sent JSON we couldn't read: {e}")))
+}
+
+/// The connection budget for one GET: no more than the time left, and no more than the agent's
+/// own connect limit when it has one. A shorter configured connect timeout must not be widened to
+/// the whole answer wait.
+fn attempt_connect(agent: &ureq::Agent, left: Duration) -> Duration {
+    agent.config().timeouts().connect.map_or(left, |connect| connect.min(left))
 }
 
 /// A GET that stayed interrupted after its tries: repeating a read is safe, so it doesn't get the
@@ -424,6 +446,28 @@ mod tests {
         });
         assert_eq!(calls, 1);
         assert_eq!(failed.unwrap_err().code, ErrorCode::EngineMissing);
+    }
+
+    /// A shorter configured connect timeout is kept, not widened to the whole answer wait.
+    #[test]
+    fn a_short_configured_connect_timeout_is_kept() {
+        let short = agent(Duration::from_secs(1), Duration::from_secs(5), Duration::from_secs(5));
+        assert_eq!(attempt_connect(&short, Duration::from_secs(3)), Duration::from_secs(1));
+        assert_eq!(attempt_connect(&short, Duration::from_millis(500)), Duration::from_millis(500));
+        let unset = ureq::Agent::config_builder().build().new_agent();
+        assert_eq!(attempt_connect(&unset, Duration::from_secs(2)), Duration::from_secs(2));
+    }
+
+    /// A global cap that fires after the connection was opened is still a reached server, not an
+    /// unreachable one; the per-phase timeouts fire first when opening the connection is the
+    /// problem.
+    #[test]
+    fn a_global_timeout_after_reaching_the_server_says_it_was_reached() {
+        let err = net_error("Ollama", "https://ollama.example.com/v1", ureq::Error::Timeout(ureq::Timeout::Global));
+        assert_eq!(err.code, ErrorCode::TimedOut, "{err:?}");
+        assert!(was_reached(&err), "{err:?}");
+        assert!(err.message.contains("took the request") && err.message.contains("finish answering"), "{err:?}");
+        assert!(err.remediation.as_deref().is_some_and(|r| r.contains("timeout_secs")), "{err:?}");
     }
 
     /// #1239: an answer that never started (a server busy with another tool's work) says which
