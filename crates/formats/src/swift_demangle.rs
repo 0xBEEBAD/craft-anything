@@ -301,6 +301,14 @@ impl<'a> D<'a> {
         }
     }
 
+    /// Is a context a class type, so that `fD` reads as `__deallocating_deinit`?
+    /// Value types, protocols, metatypes and (extension) non-class bases read `deinit`.
+    fn is_class_context(n: &N) -> bool {
+        // Swift 6.1 accepts only an immediate Class nominal context; extension-wrapped,
+        // bound/generic and nested-entity contexts render `deinit`.
+        matches!(n, N::Nominal { kind: 'C', .. })
+    }
+
     fn pop_name(&mut self) -> R<String> {
         match self.pop()? {
             N::Ident(i) => Ok(i),
@@ -1788,7 +1796,7 @@ impl<'a> D<'a> {
             }
             b'f' => {
                 let k = self.next()?;
-                let kind = match k {
+                let mut kind = match k {
                     b'C' => EKind::AllocInit,
                     b'c' => EKind::Init,
                     b'D' => EKind::DeallocDeinit,
@@ -1853,6 +1861,9 @@ impl<'a> D<'a> {
                             },
                             _ => self.pop_context()?,
                         };
+                        if matches!(kind, EKind::DeallocDeinit) && !Self::is_class_context(&ctx) {
+                            kind = EKind::Deinit;
+                        }
                         self.push(N::Entity { kind, ctx: Box::new(ctx), name: None, labels: Vec::new(), ty: None, accessor: None, is_static: false })
                     }
                 }

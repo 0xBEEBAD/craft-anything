@@ -3887,6 +3887,8 @@ Owner: open · Status: in progress
       decode. Other rendering (no `(extension in …)` prefix, unsupported manglings reported invalid) is unchanged.
       — claimed: Chr0mium24, branch bugfix/r3.12-swift-demangle-generic-spec
 
+- [x] `fD` on a non-class Swift type now reads `deinit` instead of `__deallocating_deinit`: non-class contexts (structs, enums, protocols and their extensions) use `deinit`, while classes keep `__deallocating_deinit`. Example: `_$s13HomeDataModel8StreamedVfD` -> `HomeDataModel.Streamed.deinit`.
+      — claimed: Chr0mium24, branch bugfix/r3.12-swift-demangle-struct-deinit
 
 - [x] Take target file signatures from the shared craft-sniff table. The app still breaks ties
       that need its own parsers (managed PE, Java class versus a universal Mach-O, APK by name
