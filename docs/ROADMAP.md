@@ -764,11 +764,17 @@ Owner: open · Status: todo
 - [x] A saved fal.ai key reaches an API-key build's asset tools; every call said "No fal.ai key"
       (#923). Outside a project the tools now say that instead. Not checked with a real fal.ai key
       or API build
-- [x] fal.ai's paid generation POST reported a timeout, an interrupted call, a disconnect before the
-      answer or an unreadable answer as unreachable or garbled and invited a retry, although the
-      generation may already be running and billed. It now says so, points at the dashboard, and
-      isn't retried
+- [x] fal.ai's paid generation POST reported a timeout, an interrupted call, a connection reset or
+      TLS failure, a disconnect before the answer or an unreadable answer as unreachable or garbled
+      and invited a retry, although the generation may already be running and billed. Only a
+      failure before anything was sent (refused or failed connection, host not found, connect or
+      resolve timeout) still says "Couldn't reach"; every later failure says it may be billed,
+      points at the dashboard, and isn't retried. A generated file that can't be downloaded after
+      that also says it was paid for, gives its address, and isn't retried
       — claimed: AlexJoaquimPereira, branch bugfix/r5.5-fal-generation-timeout
+- [ ] A paid generation that may have been billed isn't counted against the project's asset budget,
+      because cost is recorded only when the file is saved: charge the estimate when the POST may
+      have been billed, so the budget matches what fal charged
 - [x] Each build has an engine of its own: sharing the app's session, whose `attach` points
       at whichever project started last, sent a build's files and asset spending to the wrong project
       (`build.parallel` is 2 by default). It takes on settings and project permissions from the
