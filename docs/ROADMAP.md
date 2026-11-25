@@ -2397,6 +2397,9 @@ Gaps found while using the app for real projects.
       terminal found npm (#2178): programs are looked up in a PATH whose `%VAR%` entries are
       expanded (`which::expand_vars`), and in Node.js's own install folder after it
       — claimed: justinjohn0306, branch bugfix/2178-npm-on-windows-path
+- [ ] The Approvals link under a project's prompt box sat right under Send, so a click a little
+      low opened Approvals instead of sending (#2435). Move it to the other end of its row
+      — claimed: ilijachrchev, branch bugfix/2435-approvals-link-gap
 
 ### R2.10 Pinned builds
 Owner: maintainers · Status: in progress
