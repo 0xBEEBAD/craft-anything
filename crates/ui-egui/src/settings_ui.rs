@@ -455,9 +455,7 @@ fn ai(app: &mut CraftApp, ui: &mut Ui) {
     if app.state.screen == crate::state::Screen::Project
         && let Some(workspace) = &app.workspace
     {
-        let choices = app.builder_choices();
-        let project_builder = workspace.manifest.builder.as_ref().filter(|name| choices.iter().any(|choice| &choice.name == *name));
-        let builder = project_builder.cloned().or_else(|| app.default_builder());
+        let builder = app.resolve_builder(workspace.manifest.builder.as_deref());
         let label = builder.map_or_else(|| tr("No builder available for a new run."), |name| trf("Builder for a new run: {name}", &[("name", &name)]));
         ui.label(RichText::new(label).color(t.text_dim));
         ui.add_space(theme::space::XS);
@@ -1580,26 +1578,35 @@ mod tests {
         app.state.screen = crate::state::Screen::Project;
         app.state.backend = Some("Chat backend".into());
         app.builder = Some("Chat backend".into());
+        app.detected = None;
         app.backends = ["Chat backend", "Project builder"]
             .map(|name| BackendConfig { name: name.into(), kind: BackendKind::Openai, model: "gpt-test".into(), base_url: None, ssh_host: None, enabled: true })
             .to_vec();
 
         let context = egui::Context::default();
         theme::install_fonts(&context);
-        let mut output = context.run_ui(Default::default(), |ui| ai(&mut app, ui));
-        output.textures_delta.clear();
-        let text = output
-            .shapes
-            .iter()
-            .filter_map(|shape| match &shape.shape {
-                egui::epaint::Shape::Text(text) => Some(text.galley.text()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let settings_text = |app: &mut CraftApp| {
+            let mut output = context.run_ui(Default::default(), |ui| ai(app, ui));
+            output.textures_delta.clear();
+            output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Text(text) => Some(text.galley.text()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let text = settings_text(&mut app);
         assert!(text.contains("Chat AI"));
         assert!(text.contains("Project builder"));
         assert!(text.contains("Builder for a new run: Project builder"));
+
+        app.backends[1].enabled = false;
+        assert!(settings_text(&mut app).contains("Builder for a new run: Chat backend"));
+        app.backends[0].enabled = false;
+        assert!(settings_text(&mut app).contains("No builder available for a new run."));
         assert_eq!(app.workspace.as_ref().unwrap().manifest.builder.as_deref(), Some("Project builder"));
     }
 
