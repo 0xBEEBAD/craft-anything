@@ -1384,6 +1384,36 @@ fn run_details(app: &mut CraftApp, ui: &mut Ui, status_row: bool) {
     }
 }
 
+/// How tall each item of a conversation was last drawn, while what decides that (the project, the
+/// column's width, the scale, the font, the mode and the language) stays the same.
+#[derive(Default)]
+pub(crate) struct FeedHeights {
+    key: Option<(PathBuf, [u32; 3], bool, String)>,
+    heights: Vec<Option<f32>>,
+}
+
+/// Whether items out of view are needed this frame: a screen reader reads them, the keyboard may
+/// move into them or be in them, and a selection that loses an end is dropped.
+fn needs_whole_feed(ui: &Ui) -> bool {
+    let ctx = ui.ctx();
+    let moves = ui.input(|i| {
+        i.events.iter().any(|e| {
+            matches!(
+                e,
+                egui::Event::Key {
+                    key: egui::Key::Tab | egui::Key::ArrowUp | egui::Key::ArrowDown | egui::Key::ArrowLeft | egui::Key::ArrowRight,
+                    pressed: true,
+                    ..
+                }
+            )
+        })
+    });
+    moves
+        || (ctx.memory(|m| m.focused().is_some()) && !ctx.text_edit_focused())
+        || ctx.plugin_opt::<egui::text_selection::LabelSelectionState>().is_some_and(|p| p.lock().has_selection())
+        || ctx.accesskit_node_builder(ui.unique_id(), |_| ()).is_some()
+}
+
 /// Each item of the feed, in order. Answers and "Try again" are collected, to act on afterwards.
 fn draw_items(
     app: &mut CraftApp,
@@ -1404,9 +1434,30 @@ fn draw_items(
             next_asked += 1;
         }
     };
+    let width = ui.available_width();
+    let sizes = [width, ui.ctx().pixels_per_point(), ui.text_style_height(&egui::TextStyle::Body)].map(f32::to_bits);
+    let key = (ws.root.clone(), sizes, advanced, crate::i18n::language());
+    let mut heights = std::mem::take(&mut app.feed_heights);
+    if heights.key.as_ref() != Some(&key) {
+        heights = FeedHeights { key: Some(key), heights: Vec::new() };
+    }
+    heights.heights.resize(items.len(), None);
+    let whole = needs_whole_feed(ui);
     for (i, item) in items.iter().enumerate() {
         questions_up_to(app, ui, i);
-        ui.push_id(i, |ui| match item {
+        // The last item may still be growing, and the rarer kinds ask or load something.
+        let settled = i + 1 < items.len()
+            && matches!(item, FeedItem::User(_) | FeedItem::Step { .. } | FeedItem::Paused | FeedItem::Agent { streaming: false, .. } | FeedItem::Work { .. });
+        if let Some(h) = heights.heights[i].filter(|_| settled && !whole) {
+            let size = Vec2::new(width, h);
+            if !ui.is_rect_visible(egui::Rect::from_min_size(ui.cursor().min, size)) {
+                // One id, as drawing it takes, so the items after it keep theirs.
+                ui.allocate_space(size);
+                ui.add_space(chat::MESSAGE_GAP);
+                continue;
+            }
+        }
+        let drawn = ui.push_id(i, |ui| match item {
             FeedItem::User(text) => chat::user_bubble(ui, text.text(), false),
             FeedItem::Step { text, .. } => chat::activity_row(ui, RichText::new(text).color(t.text_dim).size(theme::SMALL)),
             FeedItem::Paused => chat::activity_row(ui, RichText::new(tr("Paused.")).color(t.text_dim).size(theme::SMALL)),
@@ -1472,8 +1523,10 @@ fn draw_items(
                     });
             }
         });
+        heights.heights[i] = Some(drawn.response.rect.height());
         ui.add_space(chat::MESSAGE_GAP);
     }
+    app.feed_heights = heights;
     questions_up_to(app, ui, usize::MAX);
 }
 
@@ -2250,6 +2303,54 @@ impl CraftApp {
 mod tests {
     use super::*;
     use craft_anything_ai::AgentEvent;
+
+    /// Every item used to be drawn on every frame, so a long conversation made each frame slow
+    /// (#2448). What needs the items out of view still gets them, and nothing moves.
+    #[test]
+    fn a_long_conversation_draws_what_is_in_view() {
+        let d = tempfile::tempdir().unwrap();
+        let ws = Workspace::create(d.path(), "Game", "Make a game", TargetRef::None).unwrap();
+        let mut app = crate::demo::app(crate::demo::engine(craft_anything_engine::Mode::Experienced, true));
+        app.workspace = Some(ws);
+        app.state.screen = Screen::Project;
+        for i in 0..200 {
+            app.state.feed.push(FeedItem::Agent { text: format!("Answer {i} with some `code` in it."), streaming: false });
+            app.state.feed.push(FeedItem::Work { tools: vec![(format!("tool_{i}"), Some(true)); 3], notes: Vec::new() });
+        }
+        let ctx = egui::Context::default();
+        CraftApp::setup_context(&ctx);
+        // How many widgets the frame made, and the text it showed with where each piece is.
+        let mut frame = |events: Vec<egui::Event>| {
+            let screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1280.0, 820.0)));
+            let mut out = ctx.run_ui(egui::RawInput { screen_rect, events, ..Default::default() }, |ui| app.show(ui));
+            out.textures_delta.clear();
+            let shown: Vec<_> = out
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(t) => Some((t.galley.text().to_string(), t.pos.x.round(), t.pos.y.round())),
+                    _ => None,
+                })
+                .filter(|(text, ..)| text.contains("tool ") || text.starts_with("Answer"))
+                .collect();
+            (ctx.viewport(|v| v.prev_pass.widgets.layers().map(|(_, w)| w.len()).sum::<usize>()), shown)
+        };
+        for _ in 0..8 {
+            frame(Vec::new());
+        }
+        let (in_view, shown) = frame(Vec::new());
+        assert!(!shown.is_empty());
+        let key = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+        // Keyboard navigation can go to any item.
+        let (all, shown_whole) = frame(vec![key(egui::Key::Tab)]);
+        assert!(in_view * 5 < all, "{in_view} of {all} widgets");
+        assert_eq!(shown, shown_whole, "what's in view stays where it is");
+        ctx.memory_mut(|m| m.stop_text_input());
+        assert!(frame(Vec::new()).0 * 5 < all);
+        // A screen reader reads all of it.
+        ctx.enable_accesskit();
+        assert!(frame(Vec::new()).0 * 2 > all);
+    }
 
     #[test]
     fn the_app_starts_with_the_persons_settings_while_the_engine_is_busy() {
