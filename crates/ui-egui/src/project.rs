@@ -1389,7 +1389,24 @@ fn run_details(app: &mut CraftApp, ui: &mut Ui, status_row: bool) {
 #[derive(Default)]
 pub(crate) struct FeedHeights {
     key: Option<(PathBuf, [u32; 3], bool, String)>,
-    heights: Vec<Option<f32>>,
+    /// With the item's [`size_mark`] then: entries move when a folded checklist is replaced.
+    heights: Vec<Option<(SizeMark, f32)>>,
+}
+
+type SizeMark = (std::mem::Discriminant<FeedItem>, usize, usize);
+
+/// What tells an item from another that may take its place or a later state of itself, for the
+/// kinds that can be skipped out of view. The rarer kinds ask or load something.
+// shortcut: lengths, not the words; another item of the same kind and length keeps the old height until it's in view.
+fn size_mark(item: &FeedItem) -> Option<SizeMark> {
+    let (a, b) = match item {
+        FeedItem::User(u) => (u.text().len(), 0),
+        FeedItem::Step { text, .. } | FeedItem::Agent { text, streaming: false } => (text.len(), 0),
+        FeedItem::Work { tools, notes } => (tools.len() + notes.len(), tools.iter().filter(|(_, d)| *d == Some(false)).count()),
+        FeedItem::Paused => (0, 0),
+        _ => return None,
+    };
+    Some((std::mem::discriminant(item), a, b))
 }
 
 /// Whether items out of view are needed this frame: a screen reader reads them, the keyboard may
@@ -1445,10 +1462,9 @@ fn draw_items(
     let whole = needs_whole_feed(ui);
     for (i, item) in items.iter().enumerate() {
         questions_up_to(app, ui, i);
-        // The last item may still be growing, and the rarer kinds ask or load something.
-        let settled = i + 1 < items.len()
-            && matches!(item, FeedItem::User(_) | FeedItem::Step { .. } | FeedItem::Paused | FeedItem::Agent { streaming: false, .. } | FeedItem::Work { .. });
-        if let Some(h) = heights.heights[i].filter(|_| settled && !whole) {
+        // The last item may still be growing.
+        let mark = size_mark(item).filter(|_| i + 1 < items.len());
+        if let Some((_, h)) = heights.heights[i].filter(|(m, _)| !whole && mark == Some(*m)) {
             let size = Vec2::new(width, h);
             if !ui.is_rect_visible(egui::Rect::from_min_size(ui.cursor().min, size)) {
                 // One id, as drawing it takes, so the items after it keep theirs.
@@ -1523,7 +1539,7 @@ fn draw_items(
                     });
             }
         });
-        heights.heights[i] = Some(drawn.response.rect.height());
+        heights.heights[i] = size_mark(item).map(|m| (m, drawn.response.rect.height()));
         ui.add_space(chat::MESSAGE_GAP);
     }
     app.feed_heights = heights;
@@ -2313,6 +2329,7 @@ mod tests {
         let mut app = crate::demo::app(crate::demo::engine(craft_anything_engine::Mode::Experienced, true));
         app.workspace = Some(ws);
         app.state.screen = Screen::Project;
+        app.state.feed.push(FeedItem::Plan(Vec::new()));
         for i in 0..200 {
             app.state.feed.push(FeedItem::Agent { text: format!("Answer {i} with some `code` in it."), streaming: false });
             app.state.feed.push(FeedItem::Work { tools: vec![(format!("tool_{i}"), Some(true)); 3], notes: Vec::new() });
@@ -2320,7 +2337,10 @@ mod tests {
         let ctx = egui::Context::default();
         CraftApp::setup_context(&ctx);
         // How many widgets the frame made, and the text it showed with where each piece is.
-        let mut frame = |events: Vec<egui::Event>| {
+        let mut frame = |events: Vec<egui::Event>, remove_first: bool| {
+            if remove_first {
+                app.state.feed.remove(0);
+            }
             let screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1280.0, 820.0)));
             let mut out = ctx.run_ui(egui::RawInput { screen_rect, events, ..Default::default() }, |ui| app.show(ui));
             out.textures_delta.clear();
@@ -2336,20 +2356,25 @@ mod tests {
             (ctx.viewport(|v| v.prev_pass.widgets.layers().map(|(_, w)| w.len()).sum::<usize>()), shown)
         };
         for _ in 0..8 {
-            frame(Vec::new());
+            frame(Vec::new(), false);
         }
-        let (in_view, shown) = frame(Vec::new());
+        let (in_view, shown) = frame(Vec::new(), false);
         assert!(!shown.is_empty());
         let key = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
         // Keyboard navigation can go to any item.
-        let (all, shown_whole) = frame(vec![key(egui::Key::Tab)]);
+        let (all, shown_whole) = frame(vec![key(egui::Key::Tab)], false);
         assert!(in_view * 5 < all, "{in_view} of {all} widgets");
         assert_eq!(shown, shown_whole, "what's in view stays where it is");
         ctx.memory_mut(|m| m.stop_text_input());
-        assert!(frame(Vec::new()).0 * 5 < all);
+        assert!(frame(Vec::new(), false).0 * 5 < all);
+        // A folded checklist is replaced: what follows it moves up, and keeps its own heights.
+        frame(Vec::new(), true);
+        frame(Vec::new(), false);
+        let (_, shown) = frame(Vec::new(), false);
+        assert_eq!(shown, frame(vec![key(egui::Key::Tab)], false).1);
         // A screen reader reads all of it.
         ctx.enable_accesskit();
-        assert!(frame(Vec::new()).0 * 2 > all);
+        assert!(frame(Vec::new(), false).0 * 2 > all);
     }
 
     #[test]
