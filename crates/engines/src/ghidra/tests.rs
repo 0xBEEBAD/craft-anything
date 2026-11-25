@@ -311,7 +311,9 @@ fn session_cancellation_interrupts_a_pending_decompile() {
     assert!(entered.is_ok(), "the bridge did not receive the decompile");
     assert!(cancelled_before_reply.is_ok(), "cancellation waited for the bridge's reply");
     assert!(matches!(result, Err(GhidraError::Cancelled)), "{result:?}");
-    assert_eq!(next.unwrap().unwrap().entry, 0x401200);
+    let next = next.unwrap().unwrap();
+    assert_eq!(next.entry, 0x401200);
+    assert!(next.created && next.pseudocode.as_deref().unwrap_or_default().contains("FUN_00401200"), "{next:?}");
 }
 
 #[test]
