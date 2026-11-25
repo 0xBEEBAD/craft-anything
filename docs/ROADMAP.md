@@ -370,8 +370,9 @@ only when it's green and a maintainer has fully reviewed it, code as well as wor
       time limit, through `platform::retry::when_interrupted`); the Cutter command tool, whose
       commands can change the session, calls once and says the call was interrupted
       — claimed: tanish2k09, branch bugfix/r5.2-interrupted-loopback-call
-- [ ] `mcp_client.rs`'s `post` reports an interrupted call (EINTR) as "Couldn't reach the plugin"
+- [x] `mcp_client.rs`'s `post` reports an interrupted call (EINTR) as "Couldn't reach the plugin"
       (`EngineMissing`); a JSON-RPC POST isn't safe to send again, so say it was interrupted instead
+      — claimed: Afloat16, branch bugfix/r5.2-mcp-interrupted-post
 - [x] Every PR that adds UI strings appends them to the end of all 14 catalogs, so any two such
       PRs conflict once one merges (#1465): one folder per language (`i18n/<code>/core.tsv`),
       each PR adding its own file there, joined in name order by `build.rs`
