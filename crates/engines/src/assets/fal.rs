@@ -83,12 +83,16 @@ impl AssetProvider for Fal {
 }
 
 impl Fal {
-    /// Send one paid generation and return fal's answer.
+    /// Send one paid generation and return fal's answer. Redirects are not followed: a redirected
+    /// paid POST is ambiguous, so it's reported as possibly billed rather than sent again.
     fn post(&self, key: &str, model: &str, body: &Value) -> Result<Value, ToolError> {
         let url = format!("{}/{model}", self.base);
         // A 3D model takes a minute or two; fal answers once it's done.
         let resp = agent(Duration::from_secs(10 * 60))
             .post(&url)
+            .config()
+            .max_redirects(0)
+            .build()
             .header("Authorization", &format!("Key {key}"))
             .header("Content-Type", "application/json")
             .send(body.to_string())
@@ -108,12 +112,30 @@ impl Fal {
             });
         }
         let text = body.unwrap_or_default();
+        let detail: String = text.chars().take(300).collect();
         match status {
             401 | 403 => Err(ToolError::new(ErrorCode::BadSettings, "fal.ai didn't accept the key.")
                 .with_remediation("Check the fal.ai key in Settings → AI → Game assets.")),
             402 => Err(ToolError::new(ErrorCode::OverLimit, "The fal.ai account is out of credit.").with_remediation("Add credit at fal.ai, then try again.")),
-            _ => Err(ToolError::new(ErrorCode::EngineMissing, format!("fal.ai answered {status}: {}", text.chars().take(300).collect::<String>()))),
+            404 => Err(ToolError::new(ErrorCode::BadSettings, format!("fal.ai didn't find the model ({status}): {detail}"))
+                .with_remediation("Check the model in Settings → AI → Game assets.")),
+            429 => Err(ToolError::new(ErrorCode::OverLimit, format!("fal.ai is rate limiting the generation ({status}): {detail}"))
+                .with_remediation("Wait a moment, then try again.")),
+            300..=399 => Err(Fal::billed_status_error(ErrorCode::ProgramFailed, format!("fal.ai redirected the generation request ({status}): {detail}"))),
+            408 | 504 => Err(Fal::billed_status_error(ErrorCode::TimedOut, format!("fal.ai didn't answer in time ({status}): {detail}"))),
+            500..=599 => Err(Fal::billed_status_error(ErrorCode::EngineMissing, format!("fal.ai failed while answering ({status}): {detail}"))),
+            _ => Err(ToolError::new(ErrorCode::BadInput, format!("fal.ai rejected the generation ({status}): {detail}"))
+                .with_remediation("Check the prompt and model, then try again.")),
         }
+    }
+
+    /// A status that may mean fal took the generation before failing or redirecting: don't invite a
+    /// retry that could charge twice.
+    fn billed_status_error(code: ErrorCode, message: String) -> ToolError {
+        let mut err = ToolError::new(code, format!("{message} The generation may already be running and billed."))
+            .with_remediation("Check the generation in the fal.ai dashboard before trying again: sending it again may charge you twice.");
+        err.retryable = false;
+        err
     }
 
     /// The failure of one paid generation POST. Only a failure before anything was sent is a
@@ -470,6 +492,38 @@ mod tests {
         assert_eq!((err.code, err.retryable), (ErrorCode::GarbledOutput, false), "{err:?}");
         assert!(err.message.contains("may already be running") && err.message.contains("billed"), "{err:?}");
         assert!(err.remediation.as_deref().is_some_and(|r| r.contains("dashboard")), "{err:?}");
+    }
+
+    /// A gateway timeout or server failure after the POST may still have started a paid
+    /// generation: it must not be retried or read as a plain server error.
+    #[test]
+    fn an_ambiguous_server_failure_is_billed_aware() {
+        for (status, code) in [(504, ErrorCode::TimedOut), (500, ErrorCode::EngineMissing)] {
+            let (base, _) = serve(vec![(status, "not today".into())]);
+            let err = Fal { base }.post("k", "model", &json!({})).unwrap_err();
+            assert_eq!((err.code, err.retryable), (code, false), "{err:?}");
+            assert!(err.message.contains("may already be running") && err.message.contains("billed"), "{err:?}");
+            assert!(err.remediation.as_deref().is_some_and(|r| r.contains("dashboard")), "{err:?}");
+        }
+    }
+
+    /// A redirect isn't followed for a paid POST: the first address may have accepted it.
+    #[test]
+    fn a_redirected_generation_is_billed_aware() {
+        let (base, _) = serve(vec![(307, "elsewhere".into())]);
+        let err = Fal { base }.post("k", "model", &json!({})).unwrap_err();
+        assert_eq!((err.code, err.retryable), (ErrorCode::ProgramFailed, false), "{err:?}");
+        assert!(err.message.contains("redirected") && err.message.contains("billed"), "{err:?}");
+        assert!(err.remediation.as_deref().is_some_and(|r| r.contains("dashboard")), "{err:?}");
+    }
+
+    /// A request fal rejects before generating is not billed and can be corrected.
+    #[test]
+    fn a_rejected_generation_is_not_billed_aware() {
+        let (base, _) = serve(vec![(400, "bad prompt".into())]);
+        let err = Fal { base }.post("k", "model", &json!({})).unwrap_err();
+        assert_eq!((err.code, err.retryable), (ErrorCode::BadInput, false), "{err:?}");
+        assert!(!err.message.contains("billed"), "{err:?}");
     }
 
     /// A download after a paid generation can fail; it must not invite the whole paid generation
