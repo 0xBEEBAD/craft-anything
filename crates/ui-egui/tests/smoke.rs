@@ -605,6 +605,60 @@ fn tab_completes_a_slash_command_and_keeps_focus() {
     assert!(h.get_by_label("Ask for a change").is_focused(), "the box keeps focus");
 }
 
+/// #2434: Esc while typing in a project's prompt box went to the new-project screen, because egui
+/// lets go of a field's focus on Esc before the app asks whether one is focused.
+#[test]
+fn esc_in_the_prompt_box_stays_on_the_project_with_the_draft() {
+    use craft_anything_engine::workspace::{TargetRef, Workspace};
+    let d = tempfile::tempdir().unwrap();
+    let ws = Workspace::create(&d.path().join("projects"), "Game", "Recreate this game", TargetRef::None).unwrap();
+    let mut h = harness(move || {
+        let mut a = demo::app(demo::engine(Mode::Beginner, true));
+        a.workspace = Some(ws);
+        a.state.screen = Screen::Project;
+        a
+    });
+    h.run_steps(3);
+    h.get_by_label("Ask for a change").focus();
+    h.run_steps(2);
+    h.get_by_label("Ask for a change").type_text("Make it faster");
+    h.run_steps(2);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(h.state().state.screen, Screen::Project, "Esc in the box stays on the project");
+    assert_eq!(h.state().state.project_input, "Make it faster", "and keeps the draft");
+    assert!(!h.get_by_label("Ask for a change").is_focused(), "the box let go of the keys");
+    // With nothing focused, Esc goes back home as before; the draft is still there.
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(h.state().state.screen, Screen::Home);
+    assert_eq!(h.state().state.project_input, "Make it faster");
+}
+
+/// Esc in a dialog's text field closes the dialog, and only the dialog.
+#[test]
+fn esc_in_a_dialogs_field_closes_the_dialog_and_stays_on_the_screen() {
+    use craft_anything_engine::workspace::{TargetRef, Workspace};
+    use craft_anything_ui_egui::state::Modal;
+    let d = tempfile::tempdir().unwrap();
+    let ws = Workspace::create(&d.path().join("projects"), "Game", "Recreate this game", TargetRef::None).unwrap();
+    let mut h = harness(move || {
+        let mut a = demo::app(demo::engine(Mode::Beginner, true));
+        a.workspace = Some(ws);
+        a.state.screen = Screen::Project;
+        a.state.modal = Some(Modal::Website);
+        a
+    });
+    h.run_steps(3);
+    assert!(h.get_by_label("Website address").is_focused(), "the dialog's field is ready to type into");
+    h.get_by_label("Website address").type_text("example.com");
+    h.run_steps(2);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(h.state().state.modal, None, "Esc closes the dialog");
+    assert_eq!(h.state().state.screen, Screen::Project, "and stays on the project");
+}
+
 #[test]
 fn pictures_of_the_original_go_with_the_draft_then_into_the_project() {
     use craft_anything_engine::workspace::{TargetRef, Workspace};
