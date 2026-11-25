@@ -1,6 +1,6 @@
-//! A follow-up waiting for a build slot: the person's words, copied attachments and identities of
-//! waiting notes it already carries. Restarting uses the current builder, mode and limits, and
-//! never starts a run by itself.
+//! A follow-up waiting for a build slot: the person's words, original request time, copied
+//! attachments and identities of waiting notes it already carries. Restarting uses the current
+//! builder, mode and limits, and never starts a run by itself.
 
 use super::{RunOptions, Workspace, notes};
 use craft_anything_engine::versioned;
@@ -10,11 +10,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const FILE: &str = "inbox/queued-request.json";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 const MAX_BYTES: u64 = 16 * 1024 * 1024;
-const STEPS: &[versioned::Step<Value>] = &[v1_to_v2];
+const STEPS: &[versioned::Step<Value>] = &[v1_to_v2, v2_to_v3];
 const _: () = assert!(1 + STEPS.len() == VERSION as usize);
 
 fn v1_to_v2(doc: &mut Value) -> Result<(), String> {
@@ -28,11 +29,24 @@ fn v1_to_v2(doc: &mut Value) -> Result<(), String> {
     Ok(())
 }
 
+fn v2_to_v3(doc: &mut Value) -> Result<(), String> {
+    let doc = doc.as_object_mut().ok_or("the queued request is not an object")?;
+    if doc.contains_key("asked") {
+        return Err("version 2 did not record the request time".into());
+    }
+    // Its original time is unknown. Restarting or copying the file must not make this older
+    // request new enough to clear a later Ghidra stop.
+    doc.insert("asked".into(), serde_json::to_value(UNIX_EPOCH).map_err(|e| e.to_string())?);
+    doc.insert("version".into(), Value::from(3));
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct QueuedRequest {
     version: u32,
     message: String,
+    asked: SystemTime,
     shown: Option<String>,
     #[serde(default)]
     shown_pictures: Vec<PathBuf>,
@@ -46,6 +60,7 @@ impl QueuedRequest {
         Some(Self {
             version: VERSION,
             message: message.clone(),
+            asked: opts.asked,
             shown: opts.shown.clone(),
             shown_pictures: opts.shown_pictures.clone(),
             carried_notes: opts.carried_notes.clone(),
@@ -89,7 +104,7 @@ pub(super) fn validate(ws: &Workspace) -> Result<(), ToolError> {
     load(ws).map(|_| ())
 }
 
-/// Restore before deciding whether the run needs Study or a place to itself. A new explicit
+/// Restore before deciding whether the run needs Study or a queued build slot. A new explicit
 /// message takes precedence, but an unreadable older request is never silently discarded.
 pub(super) fn restore(ws: &Workspace, opts: &mut RunOptions) -> Result<Option<QueuedRequest>, ToolError> {
     let saved = load(ws)?;
@@ -97,6 +112,7 @@ pub(super) fn restore(ws: &Workspace, opts: &mut RunOptions) -> Result<Option<Qu
         && let Some(saved) = &saved
     {
         opts.message = Some(saved.message.clone());
+        opts.asked = saved.asked;
         opts.shown.clone_from(&saved.shown);
         opts.shown_pictures.clone_from(&saved.shown_pictures);
         opts.carried_notes.clone_from(&saved.carried_notes);
@@ -173,17 +189,60 @@ mod tests {
     #[test]
     fn a_saved_request_restores_its_carried_note_identities() {
         let (_dir, ws) = project();
+        let asked = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(1_234_567_890);
         let note = notes::Carried {
             id: 7,
-            note: notes::Left { text: "Add a search box".into(), shown: "Add search".into(), pictures: vec![PathBuf::from("attachments/search.png")] },
+            note: notes::Left {
+                text: "Add a search box".into(),
+                shown: "Add search".into(),
+                pictures: vec![PathBuf::from("attachments/search.png")],
+                added: Some(asked),
+            },
         };
-        let opts = RunOptions { carried_notes: vec![note.clone()], ..request("Add a search box") };
+        let opts = RunOptions { carried_notes: vec![note.clone()], asked, ..request("Add a search box") };
         save(&ws, &opts).unwrap();
         let mut restored = RunOptions::default();
         restore(&Workspace::open(&ws.root).unwrap(), &mut restored).unwrap();
         assert_eq!(restored.carried_notes, [note]);
         assert_eq!(restored.message, opts.message);
+        assert_eq!(restored.asked, asked, "the queued request keeps its original time, including subsecond precision");
         assert_eq!(load(&ws).unwrap().unwrap().version, VERSION);
+    }
+
+    #[test]
+    fn older_requests_without_a_time_do_not_clear_a_later_stop() {
+        use craft_anything_engine::tools::deep;
+        for bytes in [
+            r#"{"version":1,"message":"Old request","shown":null,"shown_pictures":[]}"#,
+            r#"{"version":2,"message":"Old request","shown":null,"shown_pictures":[],"carried_notes":[]}"#,
+        ] {
+            let (_dir, ws) = project();
+            std::fs::create_dir_all(ws.inbox_dir()).unwrap();
+            let path = ws.root.join(FILE);
+            std::fs::write(&path, bytes).unwrap();
+            let root = ws.root.clone();
+            drop(ws);
+            deep::stop_for(&root).unwrap();
+            let marker = std::fs::read(root.join(deep::STOPPED)).unwrap();
+            let ws = Workspace::open(&root).unwrap();
+            let after_stop = std::time::SystemTime::now() + std::time::Duration::from_secs(1);
+            let mut restored = RunOptions { asked: after_stop, ..Default::default() };
+
+            restore(&ws, &mut restored).unwrap();
+            deep::resume_for(&root, restored.asked).unwrap();
+
+            assert!(deep::stopped(&root), "an unknown original time must not become a new request after restart");
+            assert_eq!(std::fs::read(root.join(deep::STOPPED)).unwrap(), marker);
+            assert_eq!(restored.message.as_deref(), Some("Old request"));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), bytes, "migration on read does not consume or rewrite the backup");
+
+            let mut fresh = RunOptions { asked: after_stop, ..request("A genuinely new request") };
+            restore(&ws, &mut fresh).unwrap();
+            deep::resume_for(&root, fresh.asked).unwrap();
+            assert!(!deep::stopped(&root), "a new explicit request still supersedes the earlier stop");
+            assert_eq!(fresh.message.as_deref(), Some("A genuinely new request"));
+            assert_eq!(fresh.asked, after_stop);
+        }
     }
 
     #[test]
@@ -219,10 +278,14 @@ mod tests {
             "{unfinished",
             r#"{"message":"No version"}"#,
             r#"{"version":0,"message":"No such old format"}"#,
-            r#"{"version":3,"message":"Keep the newer data","future":true}"#,
+            r#"{"version":4,"message":"Keep the newer data","future":true}"#,
             r#"{"version":1,"message":"Known format","unexpected":true}"#,
             r#"{"version":1,"message":"   "}"#,
             r#"{"version":1,"message":12}"#,
+            r#"{"version":2,"message":"No time in this format","asked":{"secs_since_epoch":1,"nanos_since_epoch":0}}"#,
+            r#"{"version":3,"message":"Missing request time"}"#,
+            r#"{"version":3,"message":"Invalid request time","asked":null}"#,
+            r#"{"version":3,"message":"Invalid request time","asked":{"secs_since_epoch":-1,"nanos_since_epoch":0}}"#,
         ] {
             std::fs::write(ws.root.join(FILE), bytes).unwrap();
             let mut opts = request("Do not replace unreadable words");

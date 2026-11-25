@@ -33,6 +33,10 @@ pub struct Left {
     pub shown: String,
     #[serde(default)]
     pub pictures: Vec<PathBuf>,
+    /// When the person added it, so a later run doesn't take it for a request made after a stop
+    /// ([`craft_anything_engine::tools::deep::resume_for`]). An older version's note has none.
+    #[serde(default)]
+    pub added: Option<std::time::SystemTime>,
 }
 
 /// A saved waiting note already included in a following request. Both its id and its original
@@ -46,7 +50,7 @@ pub struct Carried {
 
 impl From<&super::Note> for Carried {
     fn from(note: &super::Note) -> Self {
-        Self { id: note.id, note: Left { text: note.text.clone(), shown: note.shown.clone(), pictures: note.pictures.clone() } }
+        Self { id: note.id, note: Left { text: note.text.clone(), shown: note.shown.clone(), pictures: note.pictures.clone(), added: Some(note.added) } }
     }
 }
 
@@ -198,7 +202,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let dir = notes_dir(d.path());
         assert!(left(&dir, &[]).unwrap().is_empty(), "no folder, nothing left");
-        let note = |text: &str| Left { text: text.into(), shown: format!("{text} (shown)"), pictures: vec![PathBuf::from("pictures/a.png")] };
+        let note = |text: &str| Left { text: text.into(), shown: format!("{text} (shown)"), pictures: vec![PathBuf::from("pictures/a.png")], added: None };
         hand_over(&dir, 10, "add a form, with what was asked in Just ask", Some(&note("add a form"))).unwrap();
         hand_over(&dir, 2, "make it blue", Some(&note("make it blue"))).unwrap();
         hand_over(&dir, 3, "taken by the hook", Some(&note("taken by the hook"))).unwrap();
@@ -214,7 +218,10 @@ mod tests {
     fn a_run_takes_the_left_notes_and_starts_with_an_empty_folder() {
         let d = tempfile::tempdir().unwrap();
         let dir = notes_dir(d.path());
-        let note = Left { text: "make it blue".into(), shown: "make it blue".into(), pictures: Vec::new() };
+        // When it was added goes with it, so a run after a restart doesn't take it for a request
+        // made after a stop of Ghidra (#1903 review).
+        let added = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(1_794_000_000_123_456_789);
+        let note = Left { text: "make it blue".into(), shown: "make it blue".into(), pictures: Vec::new(), added: Some(added) };
         assert!(take_left(&dir, true).is_empty(), "no folder, nothing left");
         hand_over(&dir, 1, "make it blue", Some(&note)).unwrap();
         assert!(take_left(&dir, false).is_empty() && !dir.exists(), "a run with its own message clears them");
@@ -236,8 +243,16 @@ mod tests {
     fn only_the_exact_waiting_note_carried_by_a_request_is_omitted() {
         let d = tempfile::tempdir().unwrap();
         let dir = notes_dir(d.path());
-        let note = Left { text: "make it blue".into(), shown: "Blue".into(), pictures: vec![PathBuf::from("blue.png")] };
-        let carried = Carried { id: 7, note: note.clone() };
+        let added = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1);
+        let note = Left { text: "make it blue".into(), shown: "Blue".into(), pictures: vec![PathBuf::from("blue.png")], added: Some(added) };
+        let carried = Carried::from(&super::super::Note {
+            id: 7,
+            text: note.text.clone(),
+            shown: note.shown.clone(),
+            pictures: note.pictures.clone(),
+            questions: Vec::new(),
+            added,
+        });
         hand_over(&dir, 7, &note.text, Some(&note)).unwrap();
         hand_over(&dir, 8, &note.text, Some(&note)).unwrap();
         assert_eq!(take_uncarried(&dir, std::slice::from_ref(&carried)), std::slice::from_ref(&note), "another note with the same words is still waiting");
