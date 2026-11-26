@@ -742,6 +742,13 @@ Owner: open · Status: todo
 - [x] Bound accumulated data across all lines of one server-sent event, so short lines cannot
       grow a streamed API response without limit
       — claimed: Afloat16, branch bugfix/r5.5-bounded-sse-events-20261103
+- [x] An API POST interrupted by a signal (EINTR) was reported as "Couldn't reach {AI}"
+      (`EngineMissing`), blaming the server or connection; it now says the call was interrupted and
+      is not retried, since a sent request may already be billed. A GET cut short the same way is
+      simply asked again, since repeating it is safe
+      — claimed: AlexJoaquimPereira, branch bugfix/r5.5-interrupted-ai-call
+- [ ] The same interrupted-call reading remains in `install.rs`'s download: say interrupted there
+      too (the MCP client is covered by #2354 and #2206; fal's paid POST and download by #2426)
 - [x] Show the provider's own reason: #369 bought $10 of credit and got only "OpenRouter answered
       400: Provider returned error". Find the reason in the response body and show it — PR #542
 - [x] A Claude build failed with 400 "Invalid `signature` in `thinking` block" once the conversation
