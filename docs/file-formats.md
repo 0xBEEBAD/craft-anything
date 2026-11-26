@@ -9,6 +9,7 @@ is `crates/engine/src/versioned.rs`.
 |---|---|---|---|---|
 | `<project>/craft.json` | `engine::workspace` (`Manifest`) | `MANIFEST_VERSION` = 6 (`version`; missing = 0; 3 adds `approvals`, 4 adds the saved builder session's mode `agent_session_deep`, 5 adds the current capture's mode `capture_deep`, 6 adds the toolchain a move to another language was confirmed with, `toolchain`; a version-3 session and a version-4 capture migrate as Deep) | brought forward, saved as current | opened read-only: saving is refused, also by a build that read the file before a newer one brought it forward (builds before version 6 don't check this, so close them before running a newer one on the same project) |
 | `<project>/inbox/build-progress.json` | `engine::workspace::progress` (`BuildProgress`; written only by the rebuild run) | `BUILD_PROGRESS_VERSION` = 2 (`version`; missing = 0; 2 adds `checked`, the round kept while nothing it looked at changes) | brought forward; an absent file starts with no counted turns | the build stops and the record is left unchanged |
+| `<project>/inbox/queued-request.json` | `ai::rebuild::queued_request` (`QueuedRequest`; written before a run joins the queue) | 3 (`version`, required; `message` and original request time `asked`, optional `shown`, `shown_pictures` and `carried_notes` defaulting to empty lists; carried notes record their id and original text, shown text, pictures and known time; schema derived from the record type) | version 1 has no carried-note identities, so separately waiting notes are preserved; versions 1 and 2 have no request time and migrate with the Unix epoch; an absent file means no queued request | the start stops and the record is left unchanged |
 | `config.toml` (`settings::config_dir()`) | `engine::settings` (`Settings`) | `SETTINGS_VERSION` = 2 (`version`; missing = 0; 2 moved `[engines.ghidra] enabled` to `deep_mode`) | brought forward | loaded, never saved over |
 | `<name>.cany/project.toml` | `engine::project` (`ProjectMeta`) | `FORMAT_VERSION` = 1 (`format_version`, required) | brought forward | refused, with "update Craft Anything" |
 | `<project>/transcript.json` | `ai::context` (the API builder's conversation) | `TRANSCRIPT_VERSION` = 2 (`{version, deep, history}`; a version-1 transcript counts as Deep) | read as before; one without `deep` is resumed only in Deep | skipped when resuming (see [Newer files](#newer-files)) |
@@ -25,8 +26,18 @@ A saved `User` message with pictures is `{text, pictures: [paths]}`, where the p
 copies in the project's `attachments/`; one without pictures stays the plain string earlier
 versions wrote.
 
-Other JSON in a project (`assets.json`, `inbox/` except `inbox/build-progress.json`, `checks/`,
+Other JSON in a project (`assets.json`, `inbox/` except `build-progress.json` and `queued-request.json`, `checks/`,
 evidence records) has no version yet; add one the first time its shape changes.
+
+The queued request keeps the person's words, attachment paths and original request time, not a
+builder choice, mode, run budget or queue position. The next manual start restores it when no
+new message was supplied. Version 3 requires the original `asked` time, including its subsecond
+precision. Versions 1 and 2 lacked it and conservatively use the Unix epoch, so restarting cannot
+make an old request clear a later timestamped Ghidra stop. A new explicit message keeps its own
+request time. The file is capped at 16 MiB; malformed, oversized, unreadable and newer records are
+never treated as an absent request or overwritten. Reading does not consume it. Starting a
+worker removes the matching saved record; a failed start or a pause leaves it for retry. This
+backup does not provide exactly-once delivery across a crash after the worker has started.
 
 ## Stand-in cached responses
 

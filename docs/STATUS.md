@@ -895,6 +895,16 @@ launch or preview was run for this documentation correction.
   mode: a build keeps the Clean room or Deep mode it started in. An asset key (fal and the other
   asset providers) saved or removed in the app or through any build reaches every build in this
   app at its next call; a coding agent's own tool server reads them when it starts.
+  Before a request is accepted into that queue, its words, shown message and picture paths are
+  saved in `inbox/queued-request.json`. Pausing, closing the app or failing to start keeps them for
+  the next manual Continue or Try again, using the current builder and mode; reopening alone does
+  not start a run. A missing file means no queued request, while unreadable or newer records stop
+  the start and stay unchanged. Queued starts check the current record again without replacing
+  the request they already hold. The backup is cleared after a worker starts, not after it finishes;
+  a different request saved while it waited is kept. A queued message records the identities of
+  waiting notes already included in it, so those are not repeated and independent waiting notes
+  still reach the builder after a restart. Version 3 also keeps the original request time; older
+  records without one use the Unix epoch, so reopening does not clear a later timestamped Ghidra stop.
 - Engine gaps from the audit: Frida session tools are partly simulated; imports outside the
   argument-count table show only the arguments set in the calling block. See tool-status.md.
 
