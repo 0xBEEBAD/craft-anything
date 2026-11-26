@@ -18,6 +18,7 @@ is `crates/engine/src/versioned.rs`.
 | `<project>/questions.json` | `engine::questions` (`AskedQuestion`, written by `rebuild_question_ask`) | `QUESTIONS_VERSION` = 1 (`{version, items}`) | read as before | read as far as its fields are known |
 | `<project>/pinned/<n>/pin.json` | `engine::pins` (`Pin`) | `PIN_VERSION` = 2 (`version`; missing = 1, any other value that is not a whole number is refused; 2 records the selected program for a copied direct launch) | brought forward | read as far as its fields are known, never written over (renaming is refused) |
 | `<folder>/standin.json` | `engine::tools::standin_tools` (`analysis::standin::StandIn`; written only by `web_standin_build`) | `STANDIN_VERSION` = 2 (`version`, required; 2 adds each sample's place in the recording, `order`, and `write` for an answer to a write; a version-1 file has neither: its answers replay in turn, and a write gets each one once) | brought forward | refused, with "update Craft Anything", and never written over |
+| `<folder>/craft-pseudocode-export.json` | `engine::tools::program_facts_tools` (`ExportState`; written by `native_source_folder_write`) | `EXPORT_STATE_VERSION` = 2 (`version`, required; 2 records the source of each function) | version 1 records migrate as built-in code, preserving completed files | refused and never written over |
 | `<project>/feed.json` | `ai::rebuild::feed` (written by the run) | `FEED_VERSION` = 5 (`{version, items}`; a bare list = 0; 4 adds `PlanDismissed`, a folded plan card; 5 marks open steps stopped at a run's end) | read as before, saved as current | never written over; the conversation is rebuilt from the project for display |
 
 A saved `User` message with pictures is `{text, pictures: [paths]}`, where the pictures are the
@@ -35,6 +36,24 @@ operation group. If that group has no usable answer, it reports `cached_body_una
 of sending a bare 304 to a fresh client. A usable cached body is still stored and replayed as a 200
 with `was_not_modified: true`. This interpretation also applies to existing v1 files; the persisted
 shape and version are unchanged.
+
+## Resumable pseudo-C exports
+
+Version 2 records each function's `source`: its decompiler (`engine`), the returned function's
+`entry` in the built-in address space, and `engine_entry` when Ghidra loaded the program elsewhere.
+The engine version and selected language are kept when known. The map key and file name use the
+requested entry, so a returned containing function cannot change the resume key. `structured` is
+null when the decompiler does not report that property.
+
+Version 1 used only the built-in lifter. Its migration records that source for each function and
+keeps its `structured` flag. Existing code files are left alone: later runs can finish the same
+folder with Ghidra, with each old and new file still attributed to the engine that wrote it.
+The state records what was written; completion and source counts check which files still exist.
+A missing file counts as unfinished even when a call's writing budget is zero.
+
+The state must be a regular file of at most 256 MiB. Broken, unrecognised and newer states are
+refused before files are written. The generated schema is
+[`pseudocode-export.schema.json`](schemas/pseudocode-export.schema.json).
 
 ## Newer files
 
@@ -62,5 +81,5 @@ out of the project list.
    list and the constant disagree.
 3. Add a test that reads a literal sample of the old file (keep the existing samples; old files
    must keep loading forever).
-4. For `craft.json`, `inbox/build-progress.json`, `mechanics.json` and `self-test.json`, run `cargo xtask schemas` and commit `docs/schemas/`.
+4. For `craft.json`, `inbox/build-progress.json`, `mechanics.json`, `self-test.json` and `craft-pseudocode-export.json`, run `cargo xtask schemas` and commit `docs/schemas/`.
    `cargo xtask schemas --check` (and an engine test) fail when the published schema is stale.
